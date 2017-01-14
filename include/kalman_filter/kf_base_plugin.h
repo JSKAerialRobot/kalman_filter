@@ -191,6 +191,9 @@ namespace kf_base_plugin
       measurement_noise_covariance_ = measure_sigma_m * measure_sigma_m;
     }
 
+    inline int getId() { return id_;}
+    inline void setId(int id) { id_ = id;}
+
     inline void setCorrectState(const MatrixXd& state) {  correct_state_ = state; }
     inline void setPredictState(const MatrixXd& state) { predict_state_ = state; }
 
@@ -249,6 +252,7 @@ namespace kf_base_plugin
     ros::NodeHandle nh_;
     ros::NodeHandle nhp_;
 
+    bool param_verbose_;
     int state_dim_, input_dim_,  measure_dim_;
     double dt_, input_hz_;
     int correct_mode_;
@@ -281,13 +285,16 @@ namespace kf_base_plugin
     {
       std::string ns = nhp_.getNamespace();
 
-      if (!nhp_.getParam ("correct_mode", correct_mode_))
-        correct_mode_ = 0;
-      printf("%s: correct_mode  is %d\n", ns.c_str(), correct_mode_);
+      nhp_.param("param_verbose", param_verbose_, true);
+      nhp_.param("correct_mode", correct_mode_, 0);
 
-      printf("%s: measure_dim  is %d\n", ns.c_str(), measure_dim_);
-      printf("%s: input_dim  is %d\n", ns.c_str(), input_dim_);
-      printf("%s: state_dim  is %d\n", ns.c_str(), state_dim_);
+      if(param_verbose_)
+        {
+          cout << ns << ": correct_mode  is " << correct_mode_ << endl;
+          cout << ns << ": measure_dim  is " << measure_dim_ << endl;
+          cout << ns << ": input_dim  is " << input_dim_ << endl;
+          cout << ns << ": state_dim  is " << state_dim_ << endl;
+        }
 
       for(int i = 0; i < input_dim_; i ++)
         {
