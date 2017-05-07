@@ -47,10 +47,11 @@ include_directories(
 ## pluginlib_tutorials library
 add_library(kf_pos_vel_acc_pluginlib src/kf_pos_vel_acc_plugin.cpp)
 target_link_libraries(kf_pos_vel_acc_pluginlib ${catkin_LIBRARIES})
+add_dependencies(kf_pos_vel_acc_pluginlib ${PROJECT_NAME}_gencfg)
 
 ## plugin test
 add_executable(kf_plugin_test src/kf_plugin_test.cpp)
 target_link_libraries(kf_plugin_test ${catkin_LIBRARIES})
-
+add_dependencies(kf_pos_vel_acc_pluginlib ${PROJECT_NAME}_gencfg)
 
 
