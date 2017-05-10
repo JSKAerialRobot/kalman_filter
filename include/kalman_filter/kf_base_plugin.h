@@ -24,9 +24,7 @@ namespace kf_base_plugin
   class KalmanFilter
   {
   public:
-    virtual void initialize(ros::NodeHandle nh, string suffix, int id )  = 0;
-
-    void baseInit(ros::NodeHandle nh, string suffix, int id )
+    virtual void initialize(ros::NodeHandle nh, string suffix, int id )
     {
       id_ = id;
       nh_ = nh;

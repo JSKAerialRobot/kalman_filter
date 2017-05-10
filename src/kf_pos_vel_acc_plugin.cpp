@@ -10,7 +10,7 @@ namespace kf_pos_vel_acc_plugin
     state_dim_ = 2;
     input_dim_ = 1;
     measure_dim_ = 1;
-    baseInit(nh, suffix, id);
+    KalmanFilter::initialize(nh, suffix, id);
 
     //cfg init
     server_ = new dynamic_reconfigure::Server<kalman_filter::KalmanFilterPosVelAccConfig>(nhp_);
@@ -92,7 +92,7 @@ namespace kf_pos_vel_acc_plugin
     state_dim_ = 3;
     input_dim_ = 2;
     measure_dim_ = 1;
-    baseInit(nh, suffix, id);
+    KalmanFilter::initialize(nh, suffix, id);
 
     //cfg init
     server_ = new dynamic_reconfigure::Server<kalman_filter::KalmanFilterPosVelAccBiasConfig>(nhp_);
