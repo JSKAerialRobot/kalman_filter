@@ -46,6 +46,7 @@
 /* util */
 #include <iostream>
 #include <vector>
+#include <deque>
 
 /* for mutex */
 #include <boost/version.hpp>
@@ -65,7 +66,8 @@ namespace kf_plugin
   public:
     KalmanFilter(int state_dim, int input_dim, int measure_dim):
       state_dim_(state_dim), input_dim_(input_dim), measure_dim_(measure_dim),
-      input_start_flag_(false), measure_start_flag_(false)
+      input_start_flag_(false), measure_start_flag_(false),
+      est_state_buf_(0), est_cov_buf_(0), input_buf_(0), params_buf_(0), timestamp_buf_(0)
     {
       state_transition_model_ = MatrixXd::Zero(state_dim_, state_dim_);
       control_input_model_ = MatrixXd::Zero(state_dim_, input_dim_);
@@ -75,14 +77,10 @@ namespace kf_plugin
       measure_sigma_ = VectorXd::Zero(measure_dim_);
 
       estimate_state_ = VectorXd::Zero(state_dim_);
-
       estimate_covariance_ = MatrixXd::Zero(state_dim_, state_dim_);
-      prediction_noise_covariance_ = MatrixXd::Zero(state_dim_, state_dim_);
 
+      input_noise_covariance_ = MatrixXd::Zero(input_dim_, input_dim_);
       measurement_noise_covariance_ = MatrixXd::Zero(measure_dim_, measure_dim_);
-      inovation_covariance_ = MatrixXd::Zero(measure_dim_, measure_dim_);
-      kalman_gain_  = MatrixXd::Zero(state_dim_, measure_dim_);
-
     }
 
     virtual ~KalmanFilter(){}
@@ -99,7 +97,10 @@ namespace kf_plugin
       setMeasurementNoiseCovariance();
     }
 
-    virtual bool prediction(VectorXd  input, bool debug = false)
+    virtual bool prediction(const VectorXd& input, /* the vector of input */
+                            const vector<double>& params = vector<double>(0), /* the vector of param for predict model */
+                            const double timestamp = 0 /* the timestamp of prediction state(which will be the timestamp for whole system) */
+                            )
     {
       if(!getFilteringFlag()) return false;
 
@@ -107,20 +108,41 @@ namespace kf_plugin
       {
         boost::lock_guard<boost::mutex> lock(kf_mutex_);
 
-        statePropagation(input);
-        covariancePropagation();
+        /* update the model */
+        updatePredictModel(params);
 
-        if(debug)
+        /* propagation */
+        estimate_state_ = statePropagation(input, estimate_state_);
+        estimate_covariance_ = covariancePropagation(input, estimate_covariance_);
+
+        /* for time sync */
+        if(time_sync_)
           {
-            std::cout << "prediction: estimate_state" << estimate_state_ << std::endl;
-            std::cout << "prediction: estimate_covariance" << estimate_covariance_ << std::endl;
+            /* update the timestamp  */
+            est_state_buf_.push_back(estimate_state_);
+            est_cov_buf_.push_back(estimate_covariance_);
+            input_buf_.push_back(input);
+            params_buf_.push_back(params);
+            timestamp_buf_.push_back(timestamp);
+           }
+
+        if(debug_verbose_)
+          {
+            cout << "state transition model: " << state_transition_model_ << endl;
+            cout << "control input model:" << control_input_model_ << endl;
+
+            cout << "prediction: estimate_state" << estimate_state_ << endl;
+            cout << "prediction: estimate_covariance" << estimate_covariance_ << endl;
           }
 
       }
       return true;
     }
 
-    virtual bool correction(VectorXd measurement, bool debug = false)
+    virtual bool correction(const VectorXd& measurement, /* the vector of measurement */
+                            const vector<double>& params = vector<double>(0), /* the vector of param for correct model, the first param should be timestamp */
+                            const double timestamp = 0/* timestamp of the measure state */
+                            )
     {
       if(!getFilteringFlag()) return false;
 
@@ -128,61 +150,42 @@ namespace kf_plugin
       {
         boost::lock_guard<boost::mutex> lock(kf_mutex_);
 
-        kalmanGain();
-        stateCorrection(measurement);
-        covarianceCorrection();
-        if(debug)
+        /* update the model */
+        updateCorrectModel(params);
+
+        /* correction */
+        VectorXd estimate_state = estimate_state_;
+        MatrixXd estimate_covariance = estimate_covariance_;
+
+        if(time_sync_)
           {
-            std::cout << "estimate_state_" << std::endl <<  estimate_state_ << std::endl;
-            std::cout << "kalman_gain_" << std::endl << kalman_gain_  << std::endl;
+            if(timestamp <= 0) return false;
+            getTimeSyncState(estimate_state, estimate_covariance, timestamp);
+          }
 
-            std::cout << "state_transition_model_" << std::endl <<  state_transition_model_ << std::endl;
-            std::cout << "control_input_model_" << std::endl << control_input_model_  << std::endl;
-            std::cout << "observation_model_" << std::endl << observation_model_  << std::endl;
+        MatrixXd inovation_covariance = observation_model_ * estimate_covariance * observation_model_.transpose() + measurement_noise_covariance_;
+        MatrixXd kalman_gain = estimate_covariance * observation_model_.transpose() * inovation_covariance.inverse();
+        estimate_covariance_ = (MatrixXd::Identity(state_dim_, state_dim_) - kalman_gain * observation_model_) * estimate_covariance;
+        estimate_state_ = estimate_state + kalman_gain * getResidual(measurement, estimate_state);
 
-            std::cout << "estimate_covariance_" << std::endl << estimate_covariance_  << std::endl;
-            std::cout << "measurement_noise_covariance_" << std::endl << measurement_noise_covariance_  << std::endl;
-            std::cout << "inovation_covariance_" << std::endl << inovation_covariance_  << std::endl;
+        if(time_sync_) rePropagation();
+
+        if(debug_verbose_)
+          {
+            cout << "estimate_state" << endl <<  estimate_state_ << endl;
+            cout << "kalman_gain" << endl << kalman_gain  << endl;
+
+            cout << "state_transition_model" << endl <<  state_transition_model_ << endl;
+            cout << "control_input_model" << endl << control_input_model_  << endl;
+            cout << "observation_model" << endl << observation_model_  << endl;
+
+            cout << "estimate_covariance" << endl << estimate_covariance_  << endl;
+            cout << "inovation_covariance" << endl << inovation_covariance  << endl;
 
           }
 
       }
       return true;
-    }
-
-    /* default: linear propagation */
-    virtual void statePropagation(VectorXd input)
-    {
-      VectorXd estimate_hat_state = state_transition_model_ * estimate_state_ + control_input_model_ * input;
-      estimate_state_ = estimate_hat_state;
-    }
-
-    virtual void covariancePropagation()
-    {
-      MatrixXd estimate_bar_covariance
-        = state_transition_model_ * estimate_covariance_ * state_transition_model_.transpose()
-        + prediction_noise_covariance_;
-      estimate_covariance_ = estimate_bar_covariance;
-    }
-
-    virtual void kalmanGain()
-    {
-      inovation_covariance_ = observation_model_ * estimate_covariance_ * observation_model_.transpose()
-        + measurement_noise_covariance_;
-      kalman_gain_ = estimate_covariance_ * observation_model_.transpose() * inovation_covariance_.inverse();
-    }
-
-    virtual void covarianceCorrection()
-    {
-      MatrixXd estimate_covariance_tmp = (MatrixXd::Identity(state_dim_, state_dim_) - kalman_gain_ * observation_model_) * estimate_covariance_;
-      estimate_covariance_ = estimate_covariance_tmp;
-    }
-
-    /* default: linear propagation */
-    virtual void stateCorrection(VectorXd measurement)
-    {
-      VectorXd estimate_state = estimate_state_ + kalman_gain_ * (measurement - observation_model_ * estimate_state_);
-      estimate_state_ = estimate_state;
     }
 
     void setEstimateState(const VectorXd& state)
@@ -216,7 +219,7 @@ namespace kf_plugin
       assert(input_sigma_.size() == input_dim_);
 
       MatrixXd input_sigma_m = (input_sigma_).asDiagonal();
-      prediction_noise_covariance_ = control_input_model_ * (input_sigma_m * input_sigma_m) * control_input_model_.transpose();
+      input_noise_covariance_ = input_sigma_m * input_sigma_m;
     }
 
     void setMeasurementNoiseCovariance()
@@ -230,16 +233,16 @@ namespace kf_plugin
     inline void setId(int id) { id_ = id;}
 
     VectorXd getEstimateState()
-      {
-        boost::lock_guard<boost::mutex> lock(kf_mutex_);
-        return estimate_state_;
-      }
+    {
+      boost::lock_guard<boost::mutex> lock(kf_mutex_);
+      return estimate_state_;
+    }
 
     void getEstimateState(vector<double>& estiamte_state )
-      {
-        boost::lock_guard<boost::mutex> lock(kf_mutex_);
-         estimate_state_;
-      }
+    {
+      boost::lock_guard<boost::mutex> lock(kf_mutex_);
+      estimate_state_;
+    }
 
     inline MatrixXd getEstimateCovariance(){ return estimate_covariance_;}
 
@@ -274,8 +277,15 @@ namespace kf_plugin
       estimate_state_ = init_state;
     }
 
-    virtual void updatePredictModel(const vector<double>& params){}
-    virtual void updateCorrectModel(const vector<double>& params){}
+    virtual void updatePredictModel(const vector<double>& params = vector<double>(0)) = 0;
+    virtual void updateCorrectModel(const vector<double>& params = vector<double>(0)) = 0;
+
+    inline void setTimeSync(bool flag){time_sync_ = flag;}
+    inline double getTimestamp()
+    {
+      if(timestamp_buf_.size() == 0) return 0;
+      return timestamp_buf_.back();
+    }
 
   protected:
 
@@ -283,47 +293,56 @@ namespace kf_plugin
     ros::NodeHandle nhp_;
 
     bool param_verbose_;
+    bool debug_verbose_;
     int state_dim_, input_dim_,  measure_dim_;
     int id_;
+    bool time_sync_;
 
-    VectorXd input_sigma_,   measure_sigma_;
+    VectorXd input_sigma_,  measure_sigma_;
     VectorXd estimate_state_;
 
-    MatrixXd prediction_noise_covariance_, estimate_covariance_;
-
-    MatrixXd measurement_noise_covariance_;
-    MatrixXd inovation_covariance_;
-    MatrixXd kalman_gain_;
+    MatrixXd estimate_covariance_;
+    MatrixXd input_noise_covariance_, measurement_noise_covariance_;
 
     MatrixXd state_transition_model_;
     MatrixXd control_input_model_;
     MatrixXd observation_model_;
 
-    //filtering start flag
+    /* buffer for time sync */
+    deque<MatrixXd> est_state_buf_;
+    deque<MatrixXd> est_cov_buf_;
+    deque<VectorXd> input_buf_;
+    deque< vector<double> > params_buf_;
+    deque<double> timestamp_buf_;
+
+    /* filtering start flag */
     bool input_start_flag_;
     bool measure_start_flag_;
 
-    //for mutex
+    /* for mutex */
     boost::mutex kf_mutex_;
 
     void rosParamInit()
     {
-      std::string ns = nhp_.getNamespace();
+      string ns = nhp_.getNamespace();
 
       nhp_.param("param_verbose", param_verbose_, true);
+      nhp_.param("debug_verbose", debug_verbose_, false);
+
+      nhp_.param("time_sync", time_sync_, false);
 
       for(int i = 0; i < input_dim_; i ++)
         {
-          std::stringstream input_sigma_no;
+          stringstream input_sigma_no;
           input_sigma_no << i + 1;
-          nhp_.param(std::string("input_sigma") + input_sigma_no.str(), input_sigma_(i), 0.0);
+          nhp_.param(string("input_sigma") + input_sigma_no.str(), input_sigma_(i), 0.0);
         }
 
       for(int i = 0; i < measure_dim_; i ++)
         {
-          std::stringstream measure_sigma_no;
+          stringstream measure_sigma_no;
           measure_sigma_no << i + 1;
-          nhp_.param(std::string("measure_sigma") + measure_sigma_no.str(), measure_sigma_(i), 0.0);
+          nhp_.param(string("measure_sigma") + measure_sigma_no.str(), measure_sigma_(i), 0.0);
         }
 
       if(param_verbose_)
@@ -333,10 +352,91 @@ namespace kf_plugin
           cout << ns << ": state_dim  is " << state_dim_ << endl;
           cout << ns << ": input_sigma  is " << input_sigma_ << endl;
           cout << ns << ": measure_sigma  is " << measure_sigma_ << endl;
-        }
 
+          cout << ns << ": time sync is " << time_sync_ << endl;
+        }
     }
 
+    /* default: linear propagation */
+    virtual VectorXd statePropagation(VectorXd input, VectorXd estimate_state)
+    {
+      return state_transition_model_ * estimate_state + control_input_model_ * input;
+    }
+
+    /* default: linear subtraction */
+    virtual VectorXd getResidual(VectorXd measurement, VectorXd estimate_state)
+    {
+      return (measurement - observation_model_ * estimate_state);
+    }
+
+    MatrixXd covariancePropagation(VectorXd input, MatrixXd estimate_covariance)
+    {
+      return  state_transition_model_ * estimate_covariance * state_transition_model_.transpose() + control_input_model_ * input_noise_covariance_ * control_input_model_.transpose();
+    }
+
+    void getTimeSyncState(VectorXd& estimate_state, MatrixXd& estimate_covariance, double timestamp)
+    {
+      /* no predict state stored */
+      if(timestamp_buf_.size() == 0) return;
+
+      size_t index = timestamp_buf_.size() - 1; // max
+
+      if(debug_verbose_)
+        cout << "start timestamp searching from " << timestamp_buf_.size() << endl;
+      for(auto it = timestamp_buf_.begin(); it != timestamp_buf_.end(); ++it)
+        {
+          /* future timestamp, escape */
+          if(*it > timestamp)
+            {
+              index = distance(timestamp_buf_.begin(), it);
+
+              /* should assign the state before the measure timestamp */
+              if(index > 0) index--;
+
+              if(debug_verbose_)
+                cout << "correction, time_sync: exit from timestamp searching, index: " << index << ", min_diff of timestamp: " << timestamp - *it << endl;
+              break;
+            }
+        }
+
+       estimate_state = est_state_buf_[index];
+       estimate_covariance = est_cov_buf_[index];
+
+      /* 1. time sync: remove unnecessary part */
+      for(int i = 0; i <= index; i++)
+        {
+          est_state_buf_.pop_front();
+          est_cov_buf_.pop_front();
+          input_buf_.pop_front();
+          params_buf_.pop_front();
+          timestamp_buf_.pop_front();
+        }
+    }
+
+    void rePropagation()
+    {
+      assert(est_state_buf_.size() == params_buf_.size());
+
+      if(params_buf_.size() == 0) return;
+      /* iteration re-propagation */
+      if(debug_verbose_)
+        cout << "start re-propagation for " << params_buf_.size() << endl;
+
+      for(auto it = params_buf_.begin(); it != params_buf_.end(); ++it)
+        {
+          size_t index = distance(params_buf_.begin(), it);
+
+          /* update the model */
+          updatePredictModel(*it);
+
+          /* propagation */
+          estimate_state_ = statePropagation(input_buf_[index], estimate_state_);
+          estimate_covariance_ = covariancePropagation(input_buf_[index], estimate_covariance_);
+          /* update the buffer */
+          est_state_buf_[index] = estimate_state_;
+          est_cov_buf_[index] = estimate_covariance_;
+        }
+    }
   };
 };
 #endif

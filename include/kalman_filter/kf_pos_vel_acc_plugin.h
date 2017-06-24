@@ -46,11 +46,18 @@
 
 namespace kf_plugin
 {
-  enum CORRECT_MODE{POS = 0, VEL = 1, POS_VEL = 2,};
+  enum CORRECT_MODE{POS = 0, VEL = 1, };
 
   class KalmanFilterPosVelAcc : public kf_plugin::KalmanFilter
   {
   public:
+
+    /*
+      state_dim_ = 2 : p, v
+      input_dim_ = 1 : a
+      measure_dim_ = 1: p/v; 2: p,v
+    */
+
     KalmanFilterPosVelAcc(): KalmanFilter(2 /* state dim */,
                                           1 /* input dim */,
                                           1 /* measure dim */) {}
@@ -59,13 +66,9 @@ namespace kf_plugin
 
     void initialize(ros::NodeHandle nh, string suffix, int id);
 
-    void updatePredictModel(double dt);
-
-    void updateCorrectModel(const vector<double>& params);
-
-    bool prediction(double acc);
-
-    bool correction(vector<double>& meas, uint8_t correct_mode);
+    /* be sure that the first parma should be timestamp */
+    void updatePredictModel(const vector<double>& params = vector<double>(0));
+    void updateCorrectModel(const vector<double>& params = vector<double>(0));
 
   private:
     //dynamic reconfigure
@@ -79,6 +82,13 @@ namespace kf_plugin
   class KalmanFilterPosVelAccBias : public kf_plugin::KalmanFilter
   {
   public:
+
+    /*
+      state_dim_ = 3 : p, v, b_a
+      input_dim_ = 2 : a, d_b_a_input(0)
+      measure_dim_ = 1:  p/v; 2: p + v
+    */
+
     KalmanFilterPosVelAccBias(): KalmanFilter(3 /* state dim */,
                                               2 /* input dim */,
                                               1 /* measure dim */) {}
@@ -86,15 +96,11 @@ namespace kf_plugin
 
     void initialize(ros::NodeHandle nh, string suffix, int id);
 
-    void updatePredictModel(double dt);
+    /* be sure that the first parma should be timestamp */
+    void updatePredictModel(const vector<double>& params = vector<double>(0));
+    void updateCorrectModel(const vector<double>& params = vector<double>(0));
 
-    void updateCorrectModel(const vector<double>& params);
-
-    bool prediction(double acc);
-
-    bool correction(vector<double>& meas, uint8_t correct_mode);
-
-  private:
+      private:
     //dynamic reconfigure
     dynamic_reconfigure::Server<kalman_filter::KalmanFilterPosVelAccBiasConfig>* server_;
     dynamic_reconfigure::Server<kalman_filter::KalmanFilterPosVelAccBiasConfig>::CallbackType dynamic_reconf_func_;
