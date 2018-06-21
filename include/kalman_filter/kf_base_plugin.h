@@ -326,8 +326,10 @@ namespace kf_plugin
     {
       string ns = nhp_.getNamespace();
 
-      nhp_.param("param_verbose", param_verbose_, true);
-      nhp_.param("debug_verbose", debug_verbose_, false);
+      ros::NodeHandle global_nh("~");
+
+      global_nh.param("param_verbose", param_verbose_, true);
+      global_nh.param("debug_verbose", debug_verbose_, false);
 
       nhp_.param("time_sync", time_sync_, false);
 
@@ -350,8 +352,8 @@ namespace kf_plugin
           cout << ns << ": measure_dim  is " << measure_dim_ << endl;
           cout << ns << ": input_dim  is " << input_dim_ << endl;
           cout << ns << ": state_dim  is " << state_dim_ << endl;
-          cout << ns << ": input_sigma  is " << input_sigma_ << endl;
-          cout << ns << ": measure_sigma  is " << measure_sigma_ << endl;
+          cout << ns << ": pre-defined input_sigma  is [" << input_sigma_.transpose() << "]" << endl;
+          cout << ns << ": pre-defined measure_sigma  is [" << measure_sigma_.transpose() << "]" << endl;
 
           cout << ns << ": time sync is " << time_sync_ << endl;
         }
