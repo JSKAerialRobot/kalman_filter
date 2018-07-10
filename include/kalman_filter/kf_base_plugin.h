@@ -286,6 +286,10 @@ namespace kf_plugin
       if(timestamp_buf_.size() == 0) return 0;
       return timestamp_buf_.back();
     }
+    inline void setDebugVerbose(bool flag)
+    {
+      debug_verbose_ = flag;
+    }
 
   protected:
 
