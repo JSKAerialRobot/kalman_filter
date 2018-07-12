@@ -229,26 +229,21 @@ namespace kf_plugin
       measurement_noise_covariance_ = measure_sigma_m * measure_sigma_m;
     }
 
-    inline int getId() { return id_;}
+    inline const int getId() const { return id_;}
     inline void setId(int id) { id_ = id;}
 
-    VectorXd getEstimateState()
+    const VectorXd& getEstimateState()
     {
+      /* can not add const suffix for this function, because of the lock_guard */
       boost::lock_guard<boost::mutex> lock(kf_mutex_);
       return estimate_state_;
     }
 
-    void getEstimateState(vector<double>& estiamte_state )
-    {
-      boost::lock_guard<boost::mutex> lock(kf_mutex_);
-      estimate_state_;
-    }
+    inline const MatrixXd getEstimateCovariance() const { return estimate_covariance_;}
 
-    inline MatrixXd getEstimateCovariance(){ return estimate_covariance_;}
-
-    inline int getStateDim(){return state_dim_;}
-    inline int getInputDim(){return input_dim_;}
-    inline int getMeasureDim(){return measure_dim_;}
+    inline const int getStateDim() const {return state_dim_;}
+    inline const int getInputDim() const {return input_dim_;}
+    inline const int getMeasureDim() const {return measure_dim_;}
 
     inline void setStateTransitionModel(MatrixXd state_transition_model){state_transition_model_ = state_transition_model;}
     inline void setControlInputModel(MatrixXd control_input_model){control_input_model_ = control_input_model;}
