@@ -50,7 +50,7 @@ namespace kf_plugin
   }
 
   /* be sure that the first parma should be timestamp */
-  void KalmanFilterPosVelAcc::updatePredictModel(const vector<double>& params)
+    void KalmanFilterPosVelAcc::getPredictModel(const vector<double>& params, const VectorXd& estimate_state, MatrixXd& state_transition_model, MatrixXd& control_input_model) const
   {
     assert(params.size() == 1);
 
@@ -58,37 +58,37 @@ namespace kf_plugin
 
     assert(dt >= 0);
 
-    Matrix2d state_transition_model;
-    state_transition_model << 1, dt, 0, 1;
-    setStateTransitionModel(state_transition_model);
+    Matrix2d state_transition_model_temp;
+    state_transition_model_temp << 1, dt, 0, 1;
+    state_transition_model = state_transition_model_temp;
 
-    Matrix<double, 2, 1> control_input_model;
-    control_input_model << (dt * dt)/2, dt;
-    setControlInputModel(control_input_model);
+    Matrix<double, 2, 1> control_input_model_temp;
+    control_input_model_temp << (dt * dt)/2, dt;
+    control_input_model = control_input_model_temp;
   }
 
   /* be sure that the first parma is timestamp */
-  void KalmanFilterPosVelAcc::updateCorrectModel(const vector<double>& params)
+    void KalmanFilterPosVelAcc::getCorrectModel(const vector<double>& params, const VectorXd& estimate_state, MatrixXd& observation_model) const
   {
     /* params: correct mode */
     assert(params.size() == 1);
     assert((int)params[0] <= VEL);
 
-    Matrix<double, 1, 2> observation_model;
+    Matrix<double, 1, 2> observation_model_temp;
     switch((int)params[0])
       {
       case POS:
         {
-          observation_model << 1, 0;
+          observation_model_temp << 1, 0;
           break;
         }
       case VEL:
         {
-          observation_model << 0, 1;
+          observation_model_temp << 0, 1;
           break;
         }
       }
-    setObservationModel(observation_model);
+    observation_model = observation_model_temp;
   }
 
   void KalmanFilterPosVelAcc::cfgCallback(kalman_filter::KalmanFilterPosVelAccConfig &config, uint32_t level)
@@ -127,42 +127,42 @@ namespace kf_plugin
     server_->setCallback(dynamic_reconf_func_);
   }
 
-  void KalmanFilterPosVelAccBias::updatePredictModel(const vector<double>& params)
+  void KalmanFilterPosVelAccBias::getPredictModel(const vector<double>& params, const VectorXd& estimate_state, MatrixXd& state_transition_model, MatrixXd& control_input_model) const
   {
     assert(params.size() == 1);
 
     float dt = params[0];
 
-    Matrix3d state_transition_model;
-    state_transition_model << 1, dt, -dt*dt/2, 0, 1, -dt, 0, 0, 1;
-    setStateTransitionModel(state_transition_model);
+    Matrix3d state_transition_model_temp;
+    state_transition_model_temp << 1, dt, -dt*dt/2, 0, 1, -dt, 0, 0, 1;
+    state_transition_model = state_transition_model_temp;
 
-    Matrix<double, 3, 2> control_input_model;
-    control_input_model << (dt * dt)/2, 0, dt, 0, 0, 1;
-    setControlInputModel(control_input_model);
+    Matrix<double, 3, 2> control_input_model_temp;
+    control_input_model_temp << (dt * dt)/2, 0, dt, 0, 0, 1;
+    control_input_model = control_input_model_temp;
   }
 
-  void KalmanFilterPosVelAccBias::updateCorrectModel(const vector<double>& params)
+  void KalmanFilterPosVelAccBias::getCorrectModel(const vector<double>& params, const VectorXd& estimate_state, MatrixXd& observation_model) const
   {
     /* params: correct mode */
     assert(params.size() == 1);
     assert((int)params[0] <= VEL);
 
-    Matrix<double, 1, 3> observation_model;
+    Matrix<double, 1, 3> observation_model_temp;
     switch((int)params[0])
       {
       case POS:
         {
-          observation_model << 1, 0, 0;
+          observation_model_temp << 1, 0, 0;
           break;
         }
       case VEL:
         {
-          observation_model << 0, 1, 0;
+          observation_model_temp << 0, 1, 0;
           break;
         }
       }
-    setObservationModel(observation_model);
+    observation_model = observation_model_temp;
   }
 
 

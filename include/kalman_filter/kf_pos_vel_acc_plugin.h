@@ -67,8 +67,8 @@ namespace kf_plugin
     void initialize(ros::NodeHandle nh, string suffix, int id);
 
     /* be sure that the first parma should be timestamp */
-    void updatePredictModel(const vector<double>& params = vector<double>(0));
-    void updateCorrectModel(const vector<double>& params = vector<double>(0));
+    void getPredictModel(const vector<double>& params, const VectorXd& estimate_state, MatrixXd& state_transition_model, MatrixXd& control_input_model) const;
+    void getCorrectModel(const vector<double>& params, const VectorXd& estimate_state, MatrixXd& observation_model) const;
 
   private:
     //dynamic reconfigure
@@ -97,10 +97,10 @@ namespace kf_plugin
     void initialize(ros::NodeHandle nh, string suffix, int id);
 
     /* be sure that the first parma should be timestamp */
-    void updatePredictModel(const vector<double>& params = vector<double>(0));
-    void updateCorrectModel(const vector<double>& params = vector<double>(0));
+    void getPredictModel(const vector<double>& params, const VectorXd& estimate_state, MatrixXd& state_transition_model, MatrixXd& control_input_model) const;
+    void getCorrectModel(const vector<double>& params, const VectorXd& estimate_state, MatrixXd& observation_model) const;
 
-      private:
+  private:
     //dynamic reconfigure
     dynamic_reconfigure::Server<kalman_filter::KalmanFilterPosVelAccBiasConfig>* server_;
     dynamic_reconfigure::Server<kalman_filter::KalmanFilterPosVelAccBiasConfig>::CallbackType dynamic_reconf_func_;
