@@ -47,6 +47,11 @@ include_directories(
   ${Eigen3_INCLUDE_DIRS}
 )
 
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE RelWithDebInfo)
+endif()
+set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g")
+
 
 ## pluginlib_tutorials library
 add_library(kf_pos_vel_acc_pluginlib src/kf_pos_vel_acc_plugin.cpp)
