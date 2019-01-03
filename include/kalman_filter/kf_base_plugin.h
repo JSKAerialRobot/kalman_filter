@@ -39,6 +39,10 @@
 /* ros */
 #include <ros/ros.h>
 
+/* for dynamic reconfigure */
+#include <dynamic_reconfigure/server.h>
+#include <kalman_filter/KalmanFilterConfig.h>
+
 /* math */
 #include <Eigen/Core>
 #include <Eigen/Dense>
@@ -70,8 +74,8 @@ namespace kf_plugin
       control_input_model_ = MatrixXd::Zero(state_dim_, input_dim_);
       observation_model_ = MatrixXd::Zero(measure_dim_, state_dim_);
 
-      input_sigma_ = VectorXd::Zero(input_dim_);
-      measure_sigma_ = VectorXd::Zero(measure_dim_);
+      input_sigma_v_ = VectorXd::Zero(input_dim_);
+      measure_sigma_v_ = VectorXd::Zero(measure_dim_);
 
       estimate_state_ = VectorXd::Zero(state_dim_);
       estimate_covariance_ = MatrixXd::Zero(state_dim_, state_dim_);
@@ -92,6 +96,12 @@ namespace kf_plugin
 
       setPredictionNoiseCovariance();
       setMeasurementNoiseCovariance();
+
+      nhp_.setParam("input_sigma", 0.6);
+
+      /* cfg init */
+      cfg_server_ptr_ = boost::shared_ptr< dynamic_reconfigure::Server<kalman_filter::KalmanFilterConfig> >(new dynamic_reconfigure::Server<kalman_filter::KalmanFilterConfig>(nhp_));
+      cfg_server_ptr_->setCallback(boost::bind(&KalmanFilter::cfgCallback, this, _1, _2));
     }
 
     virtual bool prediction(const VectorXd& input, /* the vector of input */
@@ -214,32 +224,32 @@ namespace kf_plugin
       estimate_state_ = VectorXd::Zero(state_dim_);
     }
 
-    void setInputSigma( VectorXd input_sigma)
+    void setInputSigma( VectorXd input_sigma_v)
     {
-      assert(input_sigma_.size() == input_sigma.size());
-      input_sigma_ = input_sigma;
+      assert(input_sigma_v_.size() == input_sigma_v.size());
+      input_sigma_v_ = input_sigma_v;
       setPredictionNoiseCovariance();
     }
 
-    void setMeasureSigma( VectorXd measure_sigma)
+    void setMeasureSigma( VectorXd measure_sigma_v)
     {
-      assert(measure_sigma_.size() == measure_sigma.size());
-      measure_sigma_ = measure_sigma;
+      assert(measure_sigma_v_.size() == measure_sigma_v.size());
+      measure_sigma_v_ = measure_sigma_v;
       setMeasurementNoiseCovariance();
     }
 
     void setPredictionNoiseCovariance()
     {
-      assert(input_sigma_.size() == input_dim_);
+      assert(input_sigma_v_.size() == input_dim_);
 
-      MatrixXd input_sigma_m = (input_sigma_).asDiagonal();
+      MatrixXd input_sigma_m = (input_sigma_v_).asDiagonal();
       input_noise_covariance_ = input_sigma_m * input_sigma_m;
     }
 
     void setMeasurementNoiseCovariance()
     {
-      assert(measure_sigma_.size() == measure_dim_);
-      MatrixXd measure_sigma_m = (measure_sigma_).asDiagonal();
+      assert(measure_sigma_v_.size() == measure_dim_);
+      MatrixXd measure_sigma_m = (measure_sigma_v_).asDiagonal();
       measurement_noise_covariance_ = measure_sigma_m * measure_sigma_m;
     }
 
@@ -313,7 +323,8 @@ namespace kf_plugin
     int id_;
     bool time_sync_;
 
-    VectorXd input_sigma_,  measure_sigma_;
+    vector<string> input_name_v_, measure_name_v_;
+    VectorXd input_sigma_v_, measure_sigma_v_;
     VectorXd estimate_state_;
 
     MatrixXd estimate_covariance_;
@@ -338,6 +349,9 @@ namespace kf_plugin
     /* for mutex */
     std::recursive_mutex kf_mutex_;
 
+    /* dynamic reconfigure */
+    boost::shared_ptr< dynamic_reconfigure::Server<kalman_filter::KalmanFilterConfig> > cfg_server_ptr_;
+
     void rosParamInit()
     {
       string ns = nhp_.getNamespace();
@@ -349,27 +363,11 @@ namespace kf_plugin
 
       nhp_.param("time_sync", time_sync_, false);
 
-      for(int i = 0; i < input_dim_; i ++)
-        {
-          stringstream input_sigma_no;
-          input_sigma_no << i + 1;
-          nhp_.param(string("input_sigma") + input_sigma_no.str(), input_sigma_(i), 0.0);
-        }
-
-      for(int i = 0; i < measure_dim_; i ++)
-        {
-          stringstream measure_sigma_no;
-          measure_sigma_no << i + 1;
-          nhp_.param(string("measure_sigma") + measure_sigma_no.str(), measure_sigma_(i), 0.0);
-        }
-
       if(param_verbose_)
         {
           cout << ns << ": measure_dim  is " << measure_dim_ << endl;
           cout << ns << ": input_dim  is " << input_dim_ << endl;
           cout << ns << ": state_dim  is " << state_dim_ << endl;
-          cout << ns << ": pre-defined input_sigma  is [" << input_sigma_.transpose() << "]" << endl;
-          cout << ns << ": pre-defined measure_sigma  is [" << measure_sigma_.transpose() << "]" << endl;
 
           cout << ns << ": time sync is " << time_sync_ << endl;
         }
@@ -546,6 +544,70 @@ namespace kf_plugin
           /* update the buffer */
           est_state_buf_.at(index) = estimate_state_;
           //std::cout << nhp_.getNamespace() << ": estimate state: " << estimate_state_.transpose() << std::endl;
+        }
+    }
+
+    void cfgCallback(kalman_filter::KalmanFilterConfig &config, uint32_t level)
+    {
+      if(config.kalman_filter_flag == true)
+        {
+          ROS_INFO_STREAM(nhp_.getNamespace() << " cfg update");
+
+          switch(level)
+            {
+            case 1:  // hard code: INPUT_ID = 1
+              {
+                // check whether have the desired input id
+                if (config.input_id > input_sigma_v_.size() - 1)
+                  {
+                    ROS_ERROR_STREAM(nhp_.getNamespace() << ": the input id from cfg does not exist, the max id in kalman filter is " << input_sigma_v_.size() - 1);
+                    break;
+                  }
+
+                ROS_INFO_STREAM(nhp_.getNamespace() << ": check the input id: " << config.input_id << " which is " << input_name_v_.at(config.input_id));
+                break;
+              }
+            case 2:  // hard code: INPUT_SIGMA = 2
+              {
+                if (config.input_id > input_sigma_v_.size() - 1)
+                  {
+                    ROS_ERROR_STREAM(nhp_.getNamespace() << ": the input id from cfg does not exist, the max id in kalman filter is " << input_sigma_v_.size() - 1);
+                    break;
+                  }
+
+                ROS_INFO_STREAM(nhp_.getNamespace() << ": change the sigma of " << input_name_v_.at(config.input_id));
+                input_sigma_v_(config.input_id) = config.input_sigma;
+                setPredictionNoiseCovariance();
+              break;
+              }
+            case 3:  // hard code: MEASURE_ID = 3
+              {
+                // check whether have the desired measure id
+                if (config.measure_id > measure_sigma_v_.size() - 1)
+                  {
+                    ROS_ERROR_STREAM(nhp_.getNamespace() << ": the measure id from cfg does not exist, the max id in kalman filter is " << measure_sigma_v_.size() - 1);
+                    break;
+                  }
+
+                ROS_INFO_STREAM(nhp_.getNamespace() << ": check the measure id: " << config.measure_id << " which is " << measure_name_v_.at(config.measure_id));
+                break;
+              }
+            case 4:  // hard code: MEASURE_SIGMA = 4
+              {
+                if (config.measure_id > measure_sigma_v_.size() - 1)
+                  {
+                    ROS_ERROR_STREAM(nhp_.getNamespace() << ": the measure id from cfg does not exist, the max id in kalman filter is " << measure_sigma_v_.size() - 1);
+                    break;
+                  }
+
+                ROS_INFO_STREAM(nhp_.getNamespace() << ": change the sigma of " << measure_name_v_.at(config.measure_id));
+                measure_sigma_v_(config.measure_id) = config.measure_sigma;
+                setMeasurementNoiseCovariance();
+              break;
+              }
+            default :
+              break;
+            }
         }
     }
   };

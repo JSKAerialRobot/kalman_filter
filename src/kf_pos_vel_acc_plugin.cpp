@@ -42,11 +42,8 @@ namespace kf_plugin
   void KalmanFilterPosVelAcc::initialize(ros::NodeHandle nh, string suffix, int id)
   {
     KalmanFilter::initialize(nh, suffix, id);
-
-    /* cfg init */
-    server_ = new dynamic_reconfigure::Server<kalman_filter::KalmanFilterPosVelAccConfig>(nhp_);
-    dynamic_reconf_func_ = boost::bind(&KalmanFilterPosVelAcc::cfgCallback, this, _1, _2);
-    server_->setCallback(dynamic_reconf_func_);
+    input_name_v_ = {"acc"};
+    measure_name_v_ = {"pos", "vel"};
   }
 
   /* be sure that the first parma should be timestamp */
@@ -91,40 +88,12 @@ namespace kf_plugin
     observation_model = observation_model_temp;
   }
 
-  void KalmanFilterPosVelAcc::cfgCallback(kalman_filter::KalmanFilterPosVelAccConfig &config, uint32_t level)
-  {
-    if(config.kalmanFilterFlag == true)
-      {
-        printf("cfg update, node: %s ", (nhp_.getNamespace()).c_str());
-
-        switch(level)
-          {
-          case 1:  // INPUT_SIGMA = 1
-            input_sigma_(0) = config.inputSigma;
-            setPredictionNoiseCovariance();
-            printf("change the input sigma\n");
-            break;
-          case 3:  // MEASURE_SIGMA = 3
-            measure_sigma_(0) = config.measureSigma;
-            setMeasurementNoiseCovariance();
-            printf("change the measure sigma\n");
-            break;
-          default :
-            printf("\n");
-            break;
-          }
-      }
-  }
-
-
   void KalmanFilterPosVelAccBias::initialize(ros::NodeHandle nh, string suffix, int id)
   {
     KalmanFilter::initialize(nh, suffix, id);
 
-    //cfg init
-    server_ = new dynamic_reconfigure::Server<kalman_filter::KalmanFilterPosVelAccBiasConfig>(nhp_);
-    dynamic_reconf_func_ = boost::bind(&KalmanFilterPosVelAccBias::cfgCallback, this, _1, _2);
-    server_->setCallback(dynamic_reconf_func_);
+    input_name_v_ = {"acc", "bias"};
+    measure_name_v_ = {"pos", "vel"};
   }
 
   void KalmanFilterPosVelAccBias::getPredictModel(const vector<double>& params, const VectorXd& estimate_state, MatrixXd& state_transition_model, MatrixXd& control_input_model) const
@@ -164,38 +133,6 @@ namespace kf_plugin
       }
     observation_model = observation_model_temp;
   }
-
-
-  void KalmanFilterPosVelAccBias::cfgCallback(kalman_filter::KalmanFilterPosVelAccBiasConfig &config, uint32_t level)
-  {
-    if(config.kalmanFilterFlag == true)
-      {
-        printf("cfg update, node: %s", (nhp_.getNamespace()).c_str());
-
-        switch(level)
-          {
-          case 1:  // INPUT_SIGMA = 1
-            input_sigma_(0) = config.input1Sigma;
-            setPredictionNoiseCovariance();
-            printf("change the input1 sigma\n");
-            break;
-          case 2:  // BIAS_SIGMA = 2
-            input_sigma_(1) = config.input2Sigma;
-            setPredictionNoiseCovariance();
-            printf("change the input2 sigma\n");
-            break;
-          case 3:  // MEASURE_SIGMA = 3
-            measure_sigma_(0)  = config.measureSigma;
-            setMeasurementNoiseCovariance();
-            printf("change the measure sigma\n");
-            break;
-          default :
-            printf("\n");
-            break;
-          }
-      }
-  }
-
 };
 
 
