@@ -94,11 +94,6 @@ namespace kf_plugin
 
       rosParamInit();
 
-      setPredictionNoiseCovariance();
-      setMeasurementNoiseCovariance();
-
-      nhp_.setParam("input_sigma", 0.6);
-
       /* cfg init */
       cfg_server_ptr_ = boost::shared_ptr< dynamic_reconfigure::Server<kalman_filter::KalmanFilterConfig> >(new dynamic_reconfigure::Server<kalman_filter::KalmanFilterConfig>(nhp_));
       cfg_server_ptr_->setCallback(boost::bind(&KalmanFilter::cfgCallback, this, _1, _2));
