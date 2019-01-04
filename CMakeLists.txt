@@ -24,8 +24,7 @@ SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
 ## Declare ROS dynamic reconfigure parameters ##
 ################################################
 generate_dynamic_reconfigure_options(
-  cfg/KalmanFilterPosVelAccBias.cfg
-  cfg/KalmanFilterPosVelAcc.cfg
+  cfg/KalmanFilter.cfg
   )
 
 ###################################

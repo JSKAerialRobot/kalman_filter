@@ -39,11 +39,6 @@
 /* plugin */
 #include <pluginlib/class_list_macros.h>
 
-//* for dynamic reconfigure
-#include <dynamic_reconfigure/server.h>
-#include <kalman_filter/KalmanFilterPosVelAccConfig.h>
-#include <kalman_filter/KalmanFilterPosVelAccBiasConfig.h>
-
 namespace kf_plugin
 {
   enum CORRECT_MODE{POS = 0, VEL = 1, };
@@ -71,11 +66,6 @@ namespace kf_plugin
     void getCorrectModel(const vector<double>& params, const VectorXd& estimate_state, MatrixXd& observation_model) const;
 
   private:
-    //dynamic reconfigure
-    dynamic_reconfigure::Server<kalman_filter::KalmanFilterPosVelAccConfig>* server_;
-    dynamic_reconfigure::Server<kalman_filter::KalmanFilterPosVelAccConfig>::CallbackType dynamic_reconf_func_;
-
-    void cfgCallback(kalman_filter::KalmanFilterPosVelAccConfig &config, uint32_t level);
 
   };
 
@@ -101,12 +91,6 @@ namespace kf_plugin
     void getCorrectModel(const vector<double>& params, const VectorXd& estimate_state, MatrixXd& observation_model) const;
 
   private:
-    //dynamic reconfigure
-    dynamic_reconfigure::Server<kalman_filter::KalmanFilterPosVelAccBiasConfig>* server_;
-    dynamic_reconfigure::Server<kalman_filter::KalmanFilterPosVelAccBiasConfig>::CallbackType dynamic_reconf_func_;
-
-    void cfgCallback(kalman_filter::KalmanFilterPosVelAccBiasConfig &config, uint32_t level);
-
   };
 };
 
