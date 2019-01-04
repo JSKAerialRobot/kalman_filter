@@ -41,12 +41,58 @@ namespace kf_plugin
 
   void KalmanFilterPosVelAcc::initialize(ros::NodeHandle nh, string suffix, int id)
   {
-    KalmanFilter::initialize(nh, suffix, id);
-    input_name_v_ = {"acc"};
+    state_dim_ = 2; // default mode: no acc bias estimation
+    input_name_v_ = {"acc"}; // default mode: no acc bias estimation
     measure_name_v_ = {"pos", "vel"};
+
+    KalmanFilter::initialize(nh, suffix, id);
+
   }
 
-  /* be sure that the first parma should be timestamp */
+  /* Caution: this API is called in the init phase, that is, once */
+  void KalmanFilterPosVelAcc::setInputSigma(VectorXd input_sigma_v)
+  {
+    if(input_sigma_v.size() == 2) // contain the acc_bias sigma
+      {
+        if(input_sigma_v(1) == 0)
+          {// no bias estimation because the sigma is zero
+            double acc_sigma = input_sigma_v(0);
+            input_sigma_v.resize(1);
+            input_sigma_v(0) = acc_sigma;
+            ROS_INFO("%s: pos_vel_acc mode", nhp_.getNamespace().c_str());
+          }
+        else
+          {
+            estimate_acc_bias_ = true;
+
+            /* re-init the dim and relavant var */
+            state_dim_ = 3;
+            estimate_state_.conservativeResize(state_dim_);
+            estimate_covariance_ = MatrixXd::Zero(state_dim_, state_dim_);
+            input_name_v_ = {"acc", "bias"};
+            measure_name_v_ = {"pos", "vel"};
+            ROS_INFO("%s: pos_vel_acc_bias mode", nhp_.getNamespace().c_str());
+          }
+      }
+
+    KalmanFilter::setInputSigma(input_sigma_v);
+  }
+
+  bool KalmanFilterPosVelAcc::prediction(const VectorXd& input,
+                                         const double timestamp,
+                                         const vector<double>& params)
+  {
+    if(input.size() == 1 && estimate_acc_bias_) // special process for bias estimation
+      {
+        VectorXd input_temp = VectorXd::Zero(2);
+        input_temp(0) = input(0);
+        KalmanFilter::prediction(input_temp, timestamp, params);
+      }
+    else
+      KalmanFilter::prediction(input, timestamp, params);
+  }
+
+  /* be sure that the first param should be timestamp */
     void KalmanFilterPosVelAcc::getPredictModel(const vector<double>& params, const VectorXd& estimate_state, MatrixXd& state_transition_model, MatrixXd& control_input_model) const
   {
     assert(params.size() == 1);
@@ -55,13 +101,26 @@ namespace kf_plugin
 
     assert(dt >= 0);
 
-    Matrix2d state_transition_model_temp;
-    state_transition_model_temp << 1, dt, 0, 1;
-    state_transition_model = state_transition_model_temp;
+    if(estimate_acc_bias_)
+      {
+        Matrix3d state_transition_model_temp;
+        state_transition_model_temp << 1, dt, -dt*dt/2, 0, 1, -dt, 0, 0, 1;
+        state_transition_model = state_transition_model_temp;
 
-    Matrix<double, 2, 1> control_input_model_temp;
-    control_input_model_temp << (dt * dt)/2, dt;
-    control_input_model = control_input_model_temp;
+        Matrix<double, 3, 2> control_input_model_temp;
+        control_input_model_temp << (dt * dt)/2, 0, dt, 0, 0, 1;
+        control_input_model = control_input_model_temp;
+      }
+    else
+      {
+        Matrix2d state_transition_model_temp;
+        state_transition_model_temp << 1, dt, 0, 1;
+        state_transition_model = state_transition_model_temp;
+
+        Matrix<double, 2, 1> control_input_model_temp;
+        control_input_model_temp << (dt * dt)/2, dt;
+        control_input_model = control_input_model_temp;
+      }
   }
 
   /* be sure that the first parma is timestamp */
@@ -69,72 +128,61 @@ namespace kf_plugin
   {
     /* params: correct mode */
     assert(params.size() == 1);
-    assert((int)params[0] <= VEL);
+    assert((int)params[0] <= POS_VEL);
 
-    Matrix<double, 1, 2> observation_model_temp;
-    switch((int)params[0])
+    if(estimate_acc_bias_)
       {
-      case POS:
-        {
-          observation_model_temp << 1, 0;
-          break;
-        }
-      case VEL:
-        {
-          observation_model_temp << 0, 1;
-          break;
-        }
+        MatrixXd observation_model_temp(2,3);
+        observation_model_temp << 1, 0, 0, 0, 1, 0;
+        switch((int)params[0])
+          {
+          case POS:
+            {
+              //observation_model_temp << 1, 0, 0;
+              observation_model = observation_model_temp.block(0, 0, 1, 3);
+              break;
+            }
+          case VEL:
+            {
+              //observation_model_temp << 0, 1, 0;
+              observation_model = observation_model_temp.block(1, 0, 1, 3);
+              break;
+            }
+          case POS_VEL:
+            {
+              observation_model = observation_model_temp;
+              break;
+            }
+          }
       }
-    observation_model = observation_model_temp;
-  }
-
-  void KalmanFilterPosVelAccBias::initialize(ros::NodeHandle nh, string suffix, int id)
-  {
-    KalmanFilter::initialize(nh, suffix, id);
-
-    input_name_v_ = {"acc", "bias"};
-    measure_name_v_ = {"pos", "vel"};
-  }
-
-  void KalmanFilterPosVelAccBias::getPredictModel(const vector<double>& params, const VectorXd& estimate_state, MatrixXd& state_transition_model, MatrixXd& control_input_model) const
-  {
-    assert(params.size() == 1);
-
-    float dt = params[0];
-
-    Matrix3d state_transition_model_temp;
-    state_transition_model_temp << 1, dt, -dt*dt/2, 0, 1, -dt, 0, 0, 1;
-    state_transition_model = state_transition_model_temp;
-
-    Matrix<double, 3, 2> control_input_model_temp;
-    control_input_model_temp << (dt * dt)/2, 0, dt, 0, 0, 1;
-    control_input_model = control_input_model_temp;
-  }
-
-  void KalmanFilterPosVelAccBias::getCorrectModel(const vector<double>& params, const VectorXd& estimate_state, MatrixXd& observation_model) const
-  {
-    /* params: correct mode */
-    assert(params.size() == 1);
-    assert((int)params[0] <= VEL);
-
-    Matrix<double, 1, 3> observation_model_temp;
-    switch((int)params[0])
+    else
       {
-      case POS:
-        {
-          observation_model_temp << 1, 0, 0;
-          break;
-        }
-      case VEL:
-        {
-          observation_model_temp << 0, 1, 0;
-          break;
-        }
+        Matrix2d observation_model_temp = Matrix2d::Identity();
+
+        switch((int)params[0])
+          {
+          case POS:
+            {
+              //observation_model_temp << 1, 0;
+              observation_model = observation_model_temp.block(0, 0, 1, 2);
+              break;
+            }
+          case VEL:
+            {
+              //observation_model_temp << 0, 1;
+              observation_model = observation_model_temp.block(1, 0, 1, 2);
+              break;
+            }
+          case POS_VEL:
+            {
+              observation_model = observation_model_temp;
+              break;
+            }
+          }
       }
-    observation_model = observation_model_temp;
   }
+
 };
 
-
 PLUGINLIB_EXPORT_CLASS(kf_plugin::KalmanFilterPosVelAcc, kf_plugin::KalmanFilter);
-PLUGINLIB_EXPORT_CLASS(kf_plugin::KalmanFilterPosVelAccBias, kf_plugin::KalmanFilter);
+
