@@ -65,23 +65,10 @@ namespace kf_plugin
   class KalmanFilter
   {
   public:
-    KalmanFilter(int state_dim, int input_dim, int measure_dim):
-      state_dim_(state_dim), input_dim_(input_dim), measure_dim_(measure_dim),
-      input_start_flag_(false), measure_start_flag_(false),
+    KalmanFilter():
+      state_dim_(0), input_start_flag_(false), measure_start_flag_(false),
       est_state_buf_(0), est_cov_buf_(0), input_buf_(0), params_buf_(0), timestamp_buf_(0)
     {
-      state_transition_model_ = MatrixXd::Zero(state_dim_, state_dim_);
-      control_input_model_ = MatrixXd::Zero(state_dim_, input_dim_);
-      observation_model_ = MatrixXd::Zero(measure_dim_, state_dim_);
-
-      input_sigma_v_ = VectorXd::Zero(input_dim_);
-      measure_sigma_v_ = VectorXd::Zero(measure_dim_);
-
-      estimate_state_ = VectorXd::Zero(state_dim_);
-      estimate_covariance_ = MatrixXd::Zero(state_dim_, state_dim_);
-
-      input_noise_covariance_ = MatrixXd::Zero(input_dim_, input_dim_);
-      measurement_noise_covariance_ = MatrixXd::Zero(measure_dim_, measure_dim_);
     }
 
     virtual ~KalmanFilter(){}
@@ -91,6 +78,13 @@ namespace kf_plugin
       id_ = id;
       nh_ = nh;
       nhp_ = ros::NodeHandle(nh, "kf/" + suffix);
+
+      if(state_dim_ == 0)
+        throw std::runtime_error("the state dimension is zero");
+
+      /* init state and covariance */
+      estimate_state_ = VectorXd::Zero(state_dim_);
+      estimate_covariance_ = MatrixXd::Zero(state_dim_, state_dim_);
 
       rosParamInit();
 
@@ -107,10 +101,8 @@ namespace kf_plugin
 
       /* update the model */
       updatePredictModel(params);
-
       /* propagation of state */
       statePropagation(input);
-
       /* propagation of covariance */
       /* for time sync */
       if(time_sync_)
@@ -183,7 +175,7 @@ namespace kf_plugin
         std::lock_guard<std::recursive_mutex> lock(kf_mutex_);
         inovation_covariance = observation_model_ * estimate_covariance * observation_model_.transpose() + measurement_noise_covariance_;
         kalman_gain = estimate_covariance * observation_model_.transpose() * inovation_covariance.inverse();
-        estimate_covariance_ = (MatrixXd::Identity(state_dim_, state_dim_) - kalman_gain * observation_model_) * estimate_covariance;
+        estimate_covariance_ = (MatrixXd::Identity(estimate_state.size(), estimate_state.size()) - kalman_gain * observation_model_) * estimate_covariance;
         estimate_state_ = estimate_state + kalman_gain * (measurement - observation_model_ * estimate_state);
       }
 
@@ -216,34 +208,29 @@ namespace kf_plugin
     void resetState()
     {
       std::lock_guard<std::recursive_mutex> lock(kf_mutex_);
-      estimate_state_ = VectorXd::Zero(state_dim_);
+      estimate_state_.setZero();
     }
 
-    void setInputSigma( VectorXd input_sigma_v)
+    virtual void setInputSigma( VectorXd input_sigma_v)
     {
-      assert(input_sigma_v_.size() == input_sigma_v.size());
       input_sigma_v_ = input_sigma_v;
       setPredictionNoiseCovariance();
     }
 
-    void setMeasureSigma( VectorXd measure_sigma_v)
+    virtual void setMeasureSigma( VectorXd measure_sigma_v)
     {
-      assert(measure_sigma_v_.size() == measure_sigma_v.size());
       measure_sigma_v_ = measure_sigma_v;
       setMeasurementNoiseCovariance();
     }
 
     void setPredictionNoiseCovariance()
     {
-      assert(input_sigma_v_.size() == input_dim_);
-
       MatrixXd input_sigma_m = (input_sigma_v_).asDiagonal();
       input_noise_covariance_ = input_sigma_m * input_sigma_m;
     }
 
     void setMeasurementNoiseCovariance()
     {
-      assert(measure_sigma_v_.size() == measure_dim_);
       MatrixXd measure_sigma_m = (measure_sigma_v_).asDiagonal();
       measurement_noise_covariance_ = measure_sigma_m * measure_sigma_m;
     }
@@ -264,9 +251,19 @@ namespace kf_plugin
       return estimate_covariance_;
     }
 
+    inline const VectorXd& getInputSigma()
+    {
+      return input_sigma_v_;
+    }
+
+    inline const VectorXd& setMeasureSigma()
+    {
+      return measure_sigma_v_;
+    }
+
     inline const int getStateDim() const {return state_dim_;}
-    inline const int getInputDim() const {return input_dim_;}
-    inline const int getMeasureDim() const {return measure_dim_;}
+    inline const int getInputDim() const {return input_sigma_v_.size();}
+    inline const int getMeasureDim() const {return measure_sigma_v_.size();}
 
     inline void setStateTransitionModel(MatrixXd state_transition_model){state_transition_model_ = state_transition_model;}
     inline void setControlInputModel(MatrixXd control_input_model){control_input_model_ = control_input_model;}
@@ -314,15 +311,15 @@ namespace kf_plugin
 
     bool param_verbose_;
     bool debug_verbose_;
-    int state_dim_, input_dim_,  measure_dim_;
     int id_;
     bool time_sync_;
 
+    int state_dim_;
+    VectorXd estimate_state_;
+    MatrixXd estimate_covariance_;
+
     vector<string> input_name_v_, measure_name_v_;
     VectorXd input_sigma_v_, measure_sigma_v_;
-    VectorXd estimate_state_;
-
-    MatrixXd estimate_covariance_;
     MatrixXd input_noise_covariance_, measurement_noise_covariance_;
 
     MatrixXd state_transition_model_;
@@ -360,10 +357,6 @@ namespace kf_plugin
 
       if(param_verbose_)
         {
-          cout << ns << ": measure_dim  is " << measure_dim_ << endl;
-          cout << ns << ": input_dim  is " << input_dim_ << endl;
-          cout << ns << ": state_dim  is " << state_dim_ << endl;
-
           cout << ns << ": time sync is " << time_sync_ << endl;
         }
     }
@@ -374,13 +367,6 @@ namespace kf_plugin
       MatrixXd state_transition_model, control_input_model;
       getPredictModel(params, estimate_state_, state_transition_model, control_input_model);
 
-      assert(state_transition_model_.cols() == state_transition_model.cols() &&
-             state_transition_model_.rows() == state_transition_model.rows());
-
-      assert(control_input_model_.cols() == control_input_model.cols() &&
-             control_input_model_.rows() == control_input_model.rows() );
-
-
       state_transition_model_ = state_transition_model;
       control_input_model_ = control_input_model;
     }
@@ -390,9 +376,6 @@ namespace kf_plugin
       std::lock_guard<std::recursive_mutex> lock(kf_mutex_);
       MatrixXd observation_model;
       getCorrectModel(params, estimate_state_, observation_model);
-
-      assert(observation_model_.cols() == observation_model.cols() &&
-             observation_model_.rows() == observation_model.rows());
 
       observation_model_ = observation_model;
     }
@@ -542,7 +525,7 @@ namespace kf_plugin
         }
     }
 
-    void cfgCallback(kalman_filter::KalmanFilterConfig &config, uint32_t level)
+    virtual void cfgCallback(kalman_filter::KalmanFilterConfig &config, uint32_t level)
     {
       if(config.kalman_filter_flag == true)
         {
