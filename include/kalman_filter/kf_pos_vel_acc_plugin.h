@@ -41,56 +41,34 @@
 
 namespace kf_plugin
 {
-  enum CORRECT_MODE{POS = 0, VEL = 1, };
+  enum CORRECT_MODE{POS = 0, VEL = 1, POS_VEL = 2,};
 
   class KalmanFilterPosVelAcc : public kf_plugin::KalmanFilter
   {
   public:
 
     /*
-      state_dim_ = 2 : p, v
-      input_dim_ = 1 : a
-      measure_dim_ = 1: p/v; 2: p,v
+      state_dim_ = 2: p, v ; 3: p, v, b_a
+      input_dim_ = 1: a; 2: a, d_b_a
+      measure_dim_ = 1: p/v; 2: p + v
     */
 
-    KalmanFilterPosVelAcc(): KalmanFilter(2 /* state dim */,
-                                          1 /* input dim */,
-                                          1 /* measure dim */) {}
+    KalmanFilterPosVelAcc(): KalmanFilter(), estimate_acc_bias_(false) {}
 
     ~KalmanFilterPosVelAcc() {}
 
     void initialize(ros::NodeHandle nh, string suffix, int id);
 
-    /* be sure that the first parma should be timestamp */
-    void getPredictModel(const vector<double>& params, const VectorXd& estimate_state, MatrixXd& state_transition_model, MatrixXd& control_input_model) const;
-    void getCorrectModel(const vector<double>& params, const VectorXd& estimate_state, MatrixXd& observation_model) const;
-
-  private:
-
-  };
-
-  class KalmanFilterPosVelAccBias : public kf_plugin::KalmanFilter
-  {
-  public:
-
-    /*
-      state_dim_ = 3 : p, v, b_a
-      input_dim_ = 2 : a, d_b_a_input(0)
-      measure_dim_ = 1:  p/v; 2: p + v
-    */
-
-    KalmanFilterPosVelAccBias(): KalmanFilter(3 /* state dim */,
-                                              2 /* input dim */,
-                                              1 /* measure dim */) {}
-    ~KalmanFilterPosVelAccBias() {}
-
-    void initialize(ros::NodeHandle nh, string suffix, int id);
+    bool prediction(const VectorXd& input, const double timestamp, const vector<double>& params = vector<double>(0));
 
     /* be sure that the first parma should be timestamp */
     void getPredictModel(const vector<double>& params, const VectorXd& estimate_state, MatrixXd& state_transition_model, MatrixXd& control_input_model) const;
     void getCorrectModel(const vector<double>& params, const VectorXd& estimate_state, MatrixXd& observation_model) const;
 
+    void setInputSigma( VectorXd input_sigma_v);
   private:
+    bool estimate_acc_bias_;
+
   };
 };
 
