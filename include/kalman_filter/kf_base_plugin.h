@@ -499,15 +499,14 @@ namespace kf_plugin
 
     void rePropagation()
     {
-      {//lock
-        std::lock_guard<std::recursive_mutex> lock(kf_mutex_);
-        assert(est_state_buf_.size() == params_buf_.size());
-        if(params_buf_.size() == 0) return;
+      //lock
+      std::lock_guard<std::recursive_mutex> lock(kf_mutex_);
+      assert(est_state_buf_.size() == params_buf_.size());
+      if(params_buf_.size() == 0) return;
 
-        /* iteration re-propagation */
-        if(debug_verbose_)
-          cout << nhp_.getNamespace() << ": start re-propagation for " << params_buf_.size() << endl;
-      }
+      /* iteration re-propagation */
+      if(debug_verbose_)
+        cout << nhp_.getNamespace() << ": start re-propagation for " << params_buf_.size() << endl;
 
       for(auto it = params_buf_.begin(); it != params_buf_.end(); ++it)
         {
