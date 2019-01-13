@@ -7,6 +7,7 @@ project(kalman_filter)
 find_package(catkin REQUIRED COMPONENTS
   roscpp
   pluginlib
+  tf_conversions
   dynamic_reconfigure
   cmake_modules
 )
@@ -56,9 +57,13 @@ add_library(kf_pos_vel_acc_pluginlib src/kf_pos_vel_acc_plugin.cpp)
 target_link_libraries(kf_pos_vel_acc_pluginlib ${catkin_LIBRARIES} ${EIGEN3_LIBRARIES})
 add_dependencies(kf_pos_vel_acc_pluginlib ${PROJECT_NAME}_gencfg)
 
-## plugin test
+## test
 add_executable(kf_plugin_test src/kf_plugin_test.cpp)
 target_link_libraries(kf_plugin_test kf_pos_vel_acc_pluginlib ${catkin_LIBRARIES}  ${EIGEN3_LIBRARIES})
 add_dependencies(kf_plugin_test ${PROJECT_NAME}_gencfg)
+
+add_executable(lpf_test src/lpf_test.cpp)
+target_link_libraries(lpf_test ${catkin_LIBRARIES})
+
 
 
