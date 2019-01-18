@@ -1,3 +1,4 @@
+#include <ros/ros.h>
 #include <boost/shared_ptr.hpp>
 #include <pluginlib/class_loader.h>
 #include <kalman_filter/kf_base_plugin.h>
@@ -13,7 +14,7 @@ int main(int argc, char** argv)
   try
      {
        boost::shared_ptr<kf_plugin::KalmanFilter> kf_pos_vel_acc  = kf_loader.createInstance("kalman_filter/kf_pose_vel_acc");
-       kf_pos_vel_acc->initialize(nh, std::string("test"), 0);
+       kf_pos_vel_acc->initialize(std::string("test"), 0);
 
        ROS_INFO("Result OK");
      }

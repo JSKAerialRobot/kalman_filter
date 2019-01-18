@@ -57,9 +57,11 @@ namespace kf_plugin
 
     ~KalmanFilterPosVelAcc() {}
 
-    void initialize(ros::NodeHandle nh, string suffix, int id);
+    void initialize(string name, int id);
 
     bool prediction(const VectorXd& input, const double timestamp, const vector<double>& params = vector<double>(0));
+
+    void setPredictionNoiseCovariance(const VectorXd& input_sigma_v);
 
     /* be sure that the first parma should be timestamp */
     void getPredictModel(const vector<double>& params, const VectorXd& estimate_state, MatrixXd& state_transition_model, MatrixXd& control_input_model) const;

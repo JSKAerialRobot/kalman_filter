@@ -39,43 +39,49 @@
 namespace kf_plugin
 {
 
-  void KalmanFilterPosVelAcc::initialize(ros::NodeHandle nh, string suffix, int id)
+  void KalmanFilterPosVelAcc::initialize(string name, int id)
   {
     state_dim_ = 2; // default mode: no acc bias estimation
-    input_name_v_ = {"acc"}; // default mode: no acc bias estimation
-    measure_name_v_ = {"pos", "vel"};
 
-    KalmanFilter::initialize(nh, suffix, id);
+    state_names_ = {"pos", "vel", "bias"};
+    input_names_ = {"acc", "d_bias"};
+    measure_names_ = {"pos", "vel"};
+
+    KalmanFilter::initialize(name, id);
 
   }
 
   /* Caution: this API is called in the init phase, that is, once */
-  void KalmanFilterPosVelAcc::setInputSigma(VectorXd input_sigma_v)
+  void KalmanFilterPosVelAcc::setPredictionNoiseCovariance(const VectorXd& input_sigma_v)
   {
+    VectorXd input_sigma_v_temp = input_sigma_v;
     if(input_sigma_v.size() == 2) // contain the acc_bias sigma
       {
         if(input_sigma_v(1) == 0)
           {// no bias estimation because the sigma is zero
+
             double acc_sigma = input_sigma_v(0);
-            input_sigma_v.resize(1);
-            input_sigma_v(0) = acc_sigma;
-            ROS_INFO("%s: pos_vel_acc mode", nhp_.getNamespace().c_str());
+            input_sigma_v_temp.resize(1);
+            input_sigma_v_temp(0) = acc_sigma;
+
+            std::cout << name_ << ": pos_vel_acc mode" << std::endl;
           }
         else
           {
             estimate_acc_bias_ = true;
 
             /* re-init the dim and relavant var */
+            VectorXd prev_init_state = init_state_;
+            assert(prev_init_state.size() == 2);
             state_dim_ = 3;
-            estimate_state_.conservativeResize(state_dim_);
-            estimate_covariance_ = MatrixXd::Zero(state_dim_, state_dim_);
-            input_name_v_ = {"acc", "bias"};
-            measure_name_v_ = {"pos", "vel"};
-            ROS_INFO("%s: pos_vel_acc_bias mode", nhp_.getNamespace().c_str());
+            resetState();
+            init_state_(0) = prev_init_state(0);
+            init_state_(1) = prev_init_state(1);
+            std::cout << name_ << ": pos_vel_acc_bias mode" << std::endl;
           }
       }
 
-    KalmanFilter::setInputSigma(input_sigma_v);
+    KalmanFilter::setPredictionNoiseCovariance(input_sigma_v_temp);
   }
 
   bool KalmanFilterPosVelAcc::prediction(const VectorXd& input,
@@ -93,7 +99,7 @@ namespace kf_plugin
   }
 
   /* be sure that the first param should be timestamp */
-    void KalmanFilterPosVelAcc::getPredictModel(const vector<double>& params, const VectorXd& estimate_state, MatrixXd& state_transition_model, MatrixXd& control_input_model) const
+  void KalmanFilterPosVelAcc::getPredictModel(const vector<double>& params, const VectorXd& estimate_state, MatrixXd& state_transition_model, MatrixXd& control_input_model) const
   {
     assert(params.size() == 1);
 
@@ -124,7 +130,7 @@ namespace kf_plugin
   }
 
   /* be sure that the first parma is timestamp */
-    void KalmanFilterPosVelAcc::getCorrectModel(const vector<double>& params, const VectorXd& estimate_state, MatrixXd& observation_model) const
+  void KalmanFilterPosVelAcc::getCorrectModel(const vector<double>& params, const VectorXd& estimate_state, MatrixXd& observation_model) const
   {
     /* params: correct mode */
     assert(params.size() == 1);
