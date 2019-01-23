@@ -175,7 +175,8 @@ namespace kf_plugin
     virtual bool correction(const VectorXd& measurement, /* the vector of measurement */
                             const VectorXd& noise_sigma, /* the vector of measure sigma */
                             const double timestamp = -1, /* timestamp of the measure state */
-                            const vector<double>& params = vector<double>(0) /* the vector of param for correct model, the first param should be timestamp */)
+                            const vector<double>& params = vector<double>(0), /* the vector of param for correct model, the first param should be timestamp */
+                            const double outlier_thresh = 0 /*  check the outlier */)
     {
       /* lock the whole process, since several sensor may acess in the same time */
       std::lock_guard<std::recursive_mutex> lock(kf_mutex_);
@@ -194,11 +195,13 @@ namespace kf_plugin
       /* correction */
       VectorXd old_estimate_state = sync_predict_handler->estimate_state_;
       MatrixXd old_estimate_covariance = sync_predict_handler->estimate_covariance_;
-
-      correctionCore(old_estimate_state, old_estimate_covariance,
-                     measurement, observation_model, measurement_noise_covariance,
-                     sync_predict_handler->estimate_state_,
-                     sync_predict_handler->estimate_covariance_);
+      if(!correctionCore(old_estimate_state, old_estimate_covariance,
+                        measurement, observation_model,
+                        measurement_noise_covariance,
+                        outlier_thresh,
+                        sync_predict_handler->estimate_state_,
+                        sync_predict_handler->estimate_covariance_))
+        return false; // outlier
 
       /* add the correct handler to the predict handler */
       CorrectHandlerPtr new_correct_handler = CorrectHandlerPtr(new CorrectHandler());
@@ -212,6 +215,13 @@ namespace kf_plugin
       rePropagation(sync_predict_handler);
 
       return true;
+    }
+
+    const bool measurementOutlierCheck(const VectorXd& measurement, const VectorXd& estimate_state, const MatrixXd& estimate_covariance, const MatrixXd& observation_model, const MatrixXd& measurement_noise_covariance, const double& outlier_thresh)
+    {
+      VectorXd residual = measurement - observation_model * estimate_state;
+      MatrixXd inovation_covariance = observation_model * estimate_covariance * observation_model.transpose() + measurement_noise_covariance;
+      return measurementOutlierCheck(residual, inovation_covariance, outlier_thresh);
     }
 
     void resetState()
@@ -332,17 +342,26 @@ namespace kf_plugin
       propagated_covariance =  state_transition_model * estimate_covariance * state_transition_model.transpose() + control_input_model * input_noise_covariance * control_input_model.transpose();
     }
 
-    inline const void correctionCore(const VectorXd& estimate_state,
-                                      const MatrixXd& estimate_covariance,
-                                      const VectorXd& measurement,
-                                      const MatrixXd& observation_model,
-                                      const MatrixXd& measurement_noise_covariance,
-                                      VectorXd& correct_state,
-                                      MatrixXd& correct_covariance)
+    const bool correctionCore(const VectorXd& estimate_state,
+                              const MatrixXd& estimate_covariance,
+                              const VectorXd& measurement,
+                              const MatrixXd& observation_model,
+                              const MatrixXd& measurement_noise_covariance,
+                              const double& outlier_thresh,
+                              VectorXd& correct_state,
+                              MatrixXd& correct_covariance)
     {
       MatrixXd inovation_covariance = observation_model * estimate_covariance * observation_model.transpose() + measurement_noise_covariance;
       MatrixXd kalman_gain = estimate_covariance * observation_model.transpose() * inovation_covariance.inverse();
-      correct_state = estimate_state + kalman_gain * (measurement - observation_model * estimate_state);
+      VectorXd residual = measurement - observation_model * estimate_state;
+
+      /* check outlier */
+      if(outlier_thresh > 0)
+        {
+          if(!measurementOutlierCheck(residual, inovation_covariance, outlier_thresh)) return false;
+        }
+
+      correct_state = estimate_state + kalman_gain * residual;
       correct_covariance = (MatrixXd::Identity(state_dim_, state_dim_) - kalman_gain * observation_model) * estimate_covariance;
 
       if(debug_verbose_)
@@ -355,7 +374,7 @@ namespace kf_plugin
           cout << "observation_model" << endl << observation_model  << endl;
           cout << "inovation_covariance" << endl << inovation_covariance  << endl;
         }
-
+      return true;
     }
 
 
@@ -537,7 +556,9 @@ namespace kf_plugin
                   MatrixXd observation_model;
                   getCorrectModel(it->model_params_, old_estimate_state, observation_model);
                   correctionCore(old_estimate_state, old_estimate_covariance,
-                                 it->measure_value_, observation_model, it->measurement_noise_covariance_,
+                                 it->measure_value_, observation_model,
+                                 it->measurement_noise_covariance_,
+                                 false,
                                  handler->estimate_state_,
                                  handler->estimate_covariance_);
 
@@ -548,6 +569,32 @@ namespace kf_plugin
           handler = handler->next_handler_;
 
           if(handler == nullptr) break;
+        }
+    }
+
+    const bool measurementOutlierCheck(const VectorXd& residual, const MatrixXd& covariance, const double& outlier_thresh)
+    {
+      double mahalonobis_dist_square = residual.transpose() * covariance.inverse() * residual;
+
+      /*
+        TODO:
+        Table of Chi-Square Probabilities:
+        https://people.richland.edu/james/lecture/m170/tbl-chi.html
+      */
+      if(mahalonobis_dist_square > outlier_thresh)
+        {
+          if(debug_verbose_)
+            {
+              cout << name_ << ", measurement is outlier: " << mahalonobis_dist_square << " vs " << outlier_thresh << endl;
+              cout << name_ << ", residual" << endl <<  residual << endl;
+              cout << name_ << ", mahalonobis_dist_square" << endl <<  mahalonobis_dist_square << endl;
+              cout << name_ << ", covariance" << endl <<  covariance << endl;
+            }
+          return false;
+        }
+      else
+        {
+          return true;
         }
     }
   };
