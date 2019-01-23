@@ -33,6 +33,9 @@
  *  POSSIBILITY OF SUCH DAMAGE.
  *********************************************************************/
 
+#ifndef KF_POS_VEL_ACC_PLUGIN_H
+#define KF_POS_VEL_ACC_PLUGIN_H
+
 /* base class */
 #include <kalman_filter/kf_base_plugin.h>
 
@@ -74,3 +77,4 @@ namespace kf_plugin
   };
 };
 
+#endif
