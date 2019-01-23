@@ -36,19 +36,13 @@
 #ifndef KALMAN_FILTER_PLUGIN_H
 #define KALMAN_FILTER_PLUGIN_H
 
-/* ros */
-#include <ros/ros.h>
-
-/* for dynamic reconfigure */
-#include <dynamic_reconfigure/server.h>
-#include <kalman_filter/KalmanFilterConfig.h>
-
 /* math */
 #include <Eigen/Core>
 #include <Eigen/Dense>
 
 /* util */
 #include <iostream>
+#include<iomanip>
 #include <vector>
 #include <deque>
 
@@ -61,213 +55,226 @@ using namespace std;
 
 namespace kf_plugin
 {
+  class CorrectHandler
+  {
+  public:
+    CorrectHandler(){}
+    ~CorrectHandler(){}
+
+    /* assumption: the sigma is constant for whole system */
+    std::vector<double> model_params_;
+    Eigen::MatrixXd measurement_noise_covariance_;
+    Eigen::VectorXd measure_value_;
+
+    double timestamp_;
+  };
+  using CorrectHandlerPtr = std::shared_ptr<CorrectHandler>;
+
+  class PredictHandler
+  {
+  public:
+    PredictHandler():correct_handlers_(0)
+    {
+      next_handler_ = nullptr;
+    }
+    ~PredictHandler(){}
+
+    std::vector<double> model_params_;
+    Eigen::VectorXd input_;
+    double timestamp_;
+
+    VectorXd estimate_state_;
+    MatrixXd estimate_covariance_;
+
+    std::shared_ptr<PredictHandler> next_handler_;
+    std::vector<CorrectHandlerPtr> correct_handlers_;
+  };
+  using PredictHandlerPtr = std::shared_ptr<PredictHandler>;
 
   class KalmanFilter
   {
   public:
     KalmanFilter():
-      state_dim_(0), input_start_flag_(false), measure_start_flag_(false),
-      est_state_buf_(0), est_cov_buf_(0), input_buf_(0), params_buf_(0), timestamp_buf_(0)
+      input_start_flag_(false), measure_start_flag_(false),debug_verbose_(false),
+      state_dim_(0), predict_handlers_(0), buf_size_(10)
     {
     }
 
     virtual ~KalmanFilter(){}
 
-    virtual void initialize(ros::NodeHandle nh, string suffix, int id )
+    virtual void initialize(string name, int id)
     {
+      name_ = name;
       id_ = id;
-      nh_ = nh;
-      nhp_ = ros::NodeHandle(nh, "kf/" + suffix);
+      if(state_dim_ == 0) throw std::runtime_error("the state dimension is zero");
 
-      if(state_dim_ == 0)
-        throw std::runtime_error("the state dimension is zero");
-
-      /* init state and covariance */
-      estimate_state_ = VectorXd::Zero(state_dim_);
-      estimate_covariance_ = MatrixXd::Zero(state_dim_, state_dim_);
-
-      rosParamInit();
-
-      /* cfg init */
-      cfg_server_ptr_ = boost::shared_ptr< dynamic_reconfigure::Server<kalman_filter::KalmanFilterConfig> >(new dynamic_reconfigure::Server<kalman_filter::KalmanFilterConfig>(nhp_));
-      cfg_server_ptr_->setCallback(boost::bind(&KalmanFilter::cfgCallback, this, _1, _2));
+      init_state_ = VectorXd::Zero(state_dim_);
     }
 
     virtual bool prediction(const VectorXd& input, /* the vector of input */
                             const double timestamp, /* the timestamp of prediction state(which will be the timestamp for whole system) */
                             const vector<double>& params = vector<double>(0) /* the vector of param for predict model */)
     {
+      std::lock_guard<std::recursive_mutex> lock(kf_mutex_);
+
       if(!getFilteringFlag()) return false;
 
       /* update the model */
-      updatePredictModel(params);
+      VectorXd estimate_state = (predict_handlers_.size() > 0)?predict_handlers_.back()->estimate_state_:init_state_;
+      MatrixXd state_transition_model, control_input_model;
+      getPredictModel(params, estimate_state, state_transition_model, control_input_model);
       /* propagation of state */
-      statePropagation(input);
+      VectorXd propagate_state;
+      statePropagation(estimate_state, input, state_transition_model, control_input_model,
+                       propagate_state);
+      /* create new predict handler and push back to predict_handlers vector */
+      PredictHandlerPtr new_predict_handler = PredictHandlerPtr(new PredictHandler());
+      new_predict_handler->model_params_ = params; // the predict model may change due to the repropagation
+      new_predict_handler->input_ = input;
+      new_predict_handler->estimate_state_ = propagate_state;
+      new_predict_handler->estimate_covariance_ = MatrixXd::Zero(state_dim_, state_dim_); // unknown, set negative
+      new_predict_handler->timestamp_ = timestamp;
+      if(predict_handlers_.size() > 0) predict_handlers_.back()->next_handler_ = new_predict_handler;
+      predict_handlers_.push_back(new_predict_handler);
       /* propagation of covariance */
-      /* for time sync */
-      if(time_sync_)
+      if(last_estimated_cov_handler_ == nullptr)
         {
-          if(debug_verbose_) std::cout  << nhp_.getNamespace() << ": prediction: time sync" << std::endl;
-
-          /*************************************************/
-          // Stephan Weiss, et.al,
-          // "Versatile Distributed Pose Estimation and Sensor
-          // Self-Calibration for an Autonomous MAV"
-          /*************************************************/
-
-          std::lock_guard<std::recursive_mutex> lock(kf_mutex_);
-
-          /* add the latest information to the ring buffer */
-          est_state_buf_.push_back(estimate_state_);
-          input_buf_.push_back(input);
-          params_buf_.push_back(params); // the predict model may change due to the repropagation
-          timestamp_buf_.push_back(timestamp);
-
-          /*
-            Propagation of convariance has delay compared with state.
-            Convariance propagation starts to the last measurement correction
-          */
-          MatrixXd state_transition_model;
-          MatrixXd control_input_model;
-          getPredictModel(params_buf_.at(est_cov_buf_.size()),
-                          est_state_buf_.at(est_cov_buf_.size()),
-                          state_transition_model, control_input_model);
-          estimate_covariance_ = covariancePropagation(estimate_covariance_,
-                                                       state_transition_model,
-                                                       control_input_model,
-                                                       input_noise_covariance_);
-          est_cov_buf_.push_back(estimate_covariance_);
+          last_estimated_cov_handler_ = predict_handlers_.back();
+          last_estimated_cov_handler_->estimate_covariance_ = control_input_model * input_noise_covariance_ * control_input_model.transpose();
         }
       else
-        covariancePropagation();
+        {
+          MatrixXd prev_covariance = last_estimated_cov_handler_->estimate_covariance_;
+          last_estimated_cov_handler_ = last_estimated_cov_handler_->next_handler_; //incremental
+          assert(last_estimated_cov_handler_ != nullptr);
+          getPredictModel(last_estimated_cov_handler_->model_params_,
+                          last_estimated_cov_handler_->estimate_state_,
+                          state_transition_model, control_input_model);
+          covariancePropagation(prev_covariance,
+                                state_transition_model, control_input_model,
+                                input_noise_covariance_,
+                                last_estimated_cov_handler_->estimate_covariance_);
+        }
+
+      /* remove the oldest predict handler */
+      if(predict_handlers_.size() > buf_size_) predict_handlers_.pop_front();
 
       if(debug_verbose_)
         {
-          std::lock_guard<std::recursive_mutex> lock(kf_mutex_);
+          cout << name_ << "prediction: " << endl;
+          cout << "state transition model: \n" << state_transition_model << endl;
+          cout << "control input model: \n" << control_input_model << endl;
 
-          cout << "state transition model: \n" << state_transition_model_ << endl;
-          cout << "control input model: \n" << control_input_model_ << endl;
-
-          cout << "prediction: estimate_state: \n" << estimate_state_.transpose() << endl;
-          cout << "prediction: estimate_covariance: \n" << estimate_covariance_ << endl;
+          cout << "state: \n" << propagate_state.transpose() << endl;
+          cout << "covariance: \n" << last_estimated_cov_handler_->estimate_covariance_ << endl;
         }
 
       return true;
     }
 
     virtual bool correction(const VectorXd& measurement, /* the vector of measurement */
-                            const double timestamp, /* timestamp of the measure state */
+                            const VectorXd& noise_sigma, /* the vector of measure sigma */
+                            const double timestamp = -1, /* timestamp of the measure state */
                             const vector<double>& params = vector<double>(0) /* the vector of param for correct model, the first param should be timestamp */)
     {
+      /* lock the whole process, since several sensor may acess in the same time */
+      std::lock_guard<std::recursive_mutex> lock(kf_mutex_);
+
       if(!getFilteringFlag()) return false;
 
+      /* get time sync predict_handler */
+      PredictHandlerPtr sync_predict_handler = getTimeSyncPropagationResult(timestamp);
+      if(sync_predict_handler == nullptr) return false;
+
       /* update the model */
-      updateCorrectModel(params);
+      MatrixXd observation_model, measurement_noise_covariance;
+      getCorrectModel(params, sync_predict_handler->estimate_state_, observation_model);
+      getMeasurementNoiseCovariance(noise_sigma, measurement_noise_covariance);
 
       /* correction */
-      VectorXd estimate_state;
-      MatrixXd estimate_covariance;
-      getTimeSyncPropagationResult(estimate_state, estimate_covariance, timestamp);
+      VectorXd old_estimate_state = sync_predict_handler->estimate_state_;
+      MatrixXd old_estimate_covariance = sync_predict_handler->estimate_covariance_;
 
-      MatrixXd kalman_gain;
-      MatrixXd inovation_covariance;
-      { //lock
-        std::lock_guard<std::recursive_mutex> lock(kf_mutex_);
-        inovation_covariance = observation_model_ * estimate_covariance * observation_model_.transpose() + measurement_noise_covariance_;
-        kalman_gain = estimate_covariance * observation_model_.transpose() * inovation_covariance.inverse();
-        estimate_covariance_ = (MatrixXd::Identity(estimate_state.size(), estimate_state.size()) - kalman_gain * observation_model_) * estimate_covariance;
-        estimate_state_ = estimate_state + kalman_gain * (measurement - observation_model_ * estimate_state);
-      }
+      correctionCore(old_estimate_state, old_estimate_covariance,
+                     measurement, observation_model, measurement_noise_covariance,
+                     sync_predict_handler->estimate_state_,
+                     sync_predict_handler->estimate_covariance_);
 
-      if(time_sync_) rePropagation();
+      /* add the correct handler to the predict handler */
+      CorrectHandlerPtr new_correct_handler = CorrectHandlerPtr(new CorrectHandler());
+      new_correct_handler->model_params_ = params;
+      new_correct_handler->measurement_noise_covariance_ = measurement_noise_covariance;
+      new_correct_handler->measure_value_ = measurement;
+      new_correct_handler->timestamp_ = (timestamp==-1)?sync_predict_handler->timestamp_:timestamp;
+      sync_predict_handler->correct_handlers_.push_back(new_correct_handler);
 
-      if(debug_verbose_)
-        {
-          std::lock_guard<std::recursive_mutex> lock(kf_mutex_);
-
-          cout << "estimate_state" << endl <<  estimate_state_ << endl;
-          cout << "kalman_gain" << endl << kalman_gain  << endl;
-
-          cout << "state_transition_model" << endl <<  state_transition_model_ << endl;
-          cout << "control_input_model" << endl << control_input_model_  << endl;
-          cout << "observation_model" << endl << observation_model_  << endl;
-
-          cout << "estimate_covariance" << endl << estimate_covariance_  << endl;
-          cout << "inovation_covariance" << endl << inovation_covariance  << endl;
-        }
+      /* repropagate state and covariance */
+      rePropagation(sync_predict_handler);
 
       return true;
-    }
-
-    void setEstimateState(const VectorXd& state)
-    {
-      std::lock_guard<std::recursive_mutex> lock(kf_mutex_);
-      estimate_state_ = state;
     }
 
     void resetState()
     {
       std::lock_guard<std::recursive_mutex> lock(kf_mutex_);
-      estimate_state_.setZero();
+      predict_handlers_.clear();
+      last_estimated_cov_handler_ = nullptr;
+      init_state_ = VectorXd::Zero(state_dim_);
     }
 
-    virtual void setInputSigma( VectorXd input_sigma_v)
+    void setInitState(const double state_value, const int no)
     {
-      input_sigma_v_ = input_sigma_v;
-      setPredictionNoiseCovariance();
+      std::lock_guard<std::recursive_mutex> lock(kf_mutex_);
+      assert(no < init_state_.size());
+      init_state_(no) = state_value;
     }
 
-    virtual void setMeasureSigma( VectorXd measure_sigma_v)
+    inline void setInitState(const VectorXd& init_state)
     {
-      measure_sigma_v_ = measure_sigma_v;
-      setMeasurementNoiseCovariance();
+      std::lock_guard<std::recursive_mutex> lock(kf_mutex_);
+      assert(init_state_.size() == init_state.size());
+      init_state_ = init_state;
     }
 
-    void setPredictionNoiseCovariance()
+    virtual void setPredictionNoiseCovariance(const VectorXd& input_sigma_v)
     {
-      MatrixXd input_sigma_m = (input_sigma_v_).asDiagonal();
+      MatrixXd input_sigma_m = (input_sigma_v).asDiagonal();
       input_noise_covariance_ = input_sigma_m * input_sigma_m;
     }
 
-    void setMeasurementNoiseCovariance()
+    inline const MatrixXd& getPredictionNoiseCovariance()
     {
-      MatrixXd measure_sigma_m = (measure_sigma_v_).asDiagonal();
-      measurement_noise_covariance_ = measure_sigma_m * measure_sigma_m;
+      return input_noise_covariance_;
     }
 
-    inline const int getId() const { return id_;}
-    inline void setId(int id) { id_ = id;}
+
+    inline virtual void getMeasurementNoiseCovariance(const VectorXd& measure_sigma_v, MatrixXd& measurement_noise_covariance)
+    {
+      MatrixXd measure_sigma_m = (measure_sigma_v).asDiagonal();
+      measurement_noise_covariance = measure_sigma_m * measure_sigma_m;
+    }
 
     const VectorXd& getEstimateState()
     {
       /* can not add const suffix for this function, because of the lock_guard */
       std::lock_guard<std::recursive_mutex> lock(kf_mutex_);
-      return estimate_state_;
+      if(predict_handlers_.size() > 0)
+        return (predict_handlers_.back())->estimate_state_;
+      else
+        return init_state_; //no predction
     }
 
-    inline const MatrixXd getEstimateCovariance() const
+    inline const MatrixXd& getEstimateCovariance()
     {
       /* TODO: this not correct, if we consider the delay (latency) in time_sync mode */
-      return estimate_covariance_;
+      std::lock_guard<std::recursive_mutex> lock(kf_mutex_);
+      return last_estimated_cov_handler_->estimate_covariance_;
     }
 
-    inline const VectorXd& getInputSigma()
-    {
-      return input_sigma_v_;
-    }
+    virtual void getPredictModel(const vector<double>& params, const VectorXd& estimate_state, MatrixXd& state_transition_model, MatrixXd& control_input_model) const = 0;
+    virtual void getCorrectModel(const vector<double>& params, const VectorXd& estimate_state, MatrixXd& observation_model) const = 0;
 
-    inline const VectorXd& setMeasureSigma()
-    {
-      return measure_sigma_v_;
-    }
-
-    inline const int getStateDim() const {return state_dim_;}
-    inline const int getInputDim() const {return input_sigma_v_.size();}
-    inline const int getMeasureDim() const {return measure_sigma_v_.size();}
-
-    inline void setStateTransitionModel(MatrixXd state_transition_model){state_transition_model_ = state_transition_model;}
-    inline void setControlInputModel(MatrixXd control_input_model){control_input_model_ = control_input_model;}
-    inline void setObservationModel(MatrixXd observation_model){observation_model_ = observation_model;}
+    inline void setDebugVerbose(const bool flag)  { debug_verbose_ = flag; }
 
     inline void setInputFlag(bool flag = true) { input_start_flag_ = flag; }
     inline void setMeasureFlag(bool flag = true) { measure_start_flag_ = flag; }
@@ -278,61 +285,27 @@ namespace kf_plugin
       else return false;
     }
 
-    void setInitState(double state_value, int no)
-    {
-      std::lock_guard<std::recursive_mutex> lock(kf_mutex_);
-      estimate_state_(no) = state_value;
-    }
-
-    inline void setInitState(VectorXd init_state)
-    {
-      std::lock_guard<std::recursive_mutex> lock(kf_mutex_);
-      estimate_state_ = init_state;
-    }
-
-    virtual void getPredictModel(const vector<double>& params, const VectorXd& estimate_state, MatrixXd& state_transition_model, MatrixXd& control_input_model) const = 0;
-    virtual void getCorrectModel(const vector<double>& params, const VectorXd& estimate_state, MatrixXd& observation_model) const = 0;
-
-    inline void setTimeSync(const bool flag){time_sync_ = flag;}
-    inline double getTimestamp()
-    {
-      if(timestamp_buf_.size() == 0) return 0;
-      return timestamp_buf_.back();
-    }
-    inline void setDebugVerbose(bool flag)
-    {
-      debug_verbose_ = flag;
-    }
+    inline const int getStateDim() const {return state_dim_;}
+    inline void setPredictBufSize(const int buf_size) {buf_size_ = buf_size;}
+    inline const int getId() const {return id_;}
 
   protected:
-
-    ros::NodeHandle nh_;
-    ros::NodeHandle nhp_;
-
-    bool param_verbose_;
     bool debug_verbose_;
+    string name_;
     int id_;
-    bool time_sync_;
+    std::vector<string> state_names_;
+    std::vector<string> input_names_;
+    std::vector<string> measure_names_;
 
+    VectorXd init_state_;
+    PredictHandlerPtr last_estimated_cov_handler_;
+
+    size_t buf_size_;
+    std::deque<PredictHandlerPtr> predict_handlers_;
+
+    /* TODO: constant variables regarding to input */
     int state_dim_;
-    VectorXd estimate_state_;
-    MatrixXd estimate_covariance_;
-
-    vector<string> input_name_v_, measure_name_v_;
-    VectorXd input_sigma_v_, measure_sigma_v_;
-    MatrixXd input_noise_covariance_, measurement_noise_covariance_;
-
-    MatrixXd state_transition_model_;
-    MatrixXd control_input_model_;
-    MatrixXd observation_model_;
-
-    /* buffer for time sync */
-    deque<Eigen::VectorXd> est_state_buf_;
-    deque<Eigen::MatrixXd> est_cov_buf_;
-    deque<Eigen::VectorXd> input_buf_;
-    deque< vector<double> > params_buf_;
-    deque<double> timestamp_buf_;
-    //int convariance_propagate_index_;
+    MatrixXd input_noise_covariance_;
 
     /* filtering start flag */
     bool input_start_flag_;
@@ -341,250 +314,240 @@ namespace kf_plugin
     /* for mutex */
     std::recursive_mutex kf_mutex_;
 
-    /* dynamic reconfigure */
-    boost::shared_ptr< dynamic_reconfigure::Server<kalman_filter::KalmanFilterConfig> > cfg_server_ptr_;
-
-    void rosParamInit()
+    inline  const void statePropagation(const VectorXd& estimate_state,
+                                        const VectorXd& input,
+                                        const MatrixXd& state_transition_model,
+                                        const MatrixXd& control_input_model,
+                                        VectorXd& propagated_state) const
     {
-      string ns = nhp_.getNamespace();
-
-      ros::NodeHandle global_nh("~");
-
-      global_nh.param("param_verbose", param_verbose_, true);
-      global_nh.param("debug_verbose", debug_verbose_, false);
-
-      nhp_.param("time_sync", time_sync_, false);
-
-      if(param_verbose_)
-        {
-          cout << ns << ": time sync is " << time_sync_ << endl;
-        }
+      propagated_state = state_transition_model * estimate_state + control_input_model * input;
     }
 
-    void updatePredictModel(const vector<double>& params)
-    {
-      std::lock_guard<std::recursive_mutex> lock(kf_mutex_);
-      MatrixXd state_transition_model, control_input_model;
-      getPredictModel(params, estimate_state_, state_transition_model, control_input_model);
-
-      state_transition_model_ = state_transition_model;
-      control_input_model_ = control_input_model;
-    }
-
-    void updateCorrectModel(const vector<double>& params)
-    {
-      std::lock_guard<std::recursive_mutex> lock(kf_mutex_);
-      MatrixXd observation_model;
-      getCorrectModel(params, estimate_state_, observation_model);
-
-      observation_model_ = observation_model;
-    }
-
-    virtual const VectorXd statePropagation(const VectorXd& estimate_state,
-                                            const VectorXd& input,
-                                            const MatrixXd& state_transition_model,
-                                            const MatrixXd& control_input_model) const
-    {
-      return state_transition_model * estimate_state + control_input_model * input;
-    }
-
-    void statePropagation(VectorXd input)
-    {
-      std::lock_guard<std::recursive_mutex> lock(kf_mutex_);
-      estimate_state_ = statePropagation(estimate_state_, input, state_transition_model_, control_input_model_);
-    }
-
-    virtual const MatrixXd covariancePropagation(const MatrixXd& estimate_covariance,
+    inline  const void covariancePropagation(const MatrixXd& estimate_covariance,
                                                  const MatrixXd& state_transition_model,
                                                  const MatrixXd& control_input_model,
-                                                 const MatrixXd& input_noise_covariance) const
+                                                 const MatrixXd& input_noise_covariance,
+                                                 MatrixXd& propagated_covariance) const
     {
-      return state_transition_model * estimate_covariance * state_transition_model.transpose() + control_input_model * input_noise_covariance * control_input_model.transpose();
+      propagated_covariance =  state_transition_model * estimate_covariance * state_transition_model.transpose() + control_input_model * input_noise_covariance * control_input_model.transpose();
     }
 
-    void covariancePropagation()
+    inline const void correctionCore(const VectorXd& estimate_state,
+                                      const MatrixXd& estimate_covariance,
+                                      const VectorXd& measurement,
+                                      const MatrixXd& observation_model,
+                                      const MatrixXd& measurement_noise_covariance,
+                                      VectorXd& correct_state,
+                                      MatrixXd& correct_covariance)
     {
-      std::lock_guard<std::recursive_mutex> lock(kf_mutex_);
-      estimate_covariance_ = covariancePropagation(estimate_covariance_, state_transition_model_,
-                                                   control_input_model_, input_noise_covariance_);
-    }
+      MatrixXd inovation_covariance = observation_model * estimate_covariance * observation_model.transpose() + measurement_noise_covariance;
+      MatrixXd kalman_gain = estimate_covariance * observation_model.transpose() * inovation_covariance.inverse();
+      correct_state = estimate_state + kalman_gain * (measurement - observation_model * estimate_state);
+      correct_covariance = (MatrixXd::Identity(state_dim_, state_dim_) - kalman_gain * observation_model) * estimate_covariance;
 
-    // virtual const VectorXd getResidual(VectorXd measurement, VectorXd estimate_state) {}
-
-    /* Stephan Weiss, et.al,
-       "Versatile Distributed Pose Estimation and Sensor
-       Self-Calibration for an Autonomous MAV"
-    */
-    void getTimeSyncPropagationResult(VectorXd& estimate_state, MatrixXd& estimate_covariance, double timestamp)
-    {
-      std::lock_guard<std::recursive_mutex> lock(kf_mutex_);
-
-      estimate_state = estimate_state_;
-      estimate_covariance = estimate_covariance_;
-
-      if(time_sync_)
+      if(debug_verbose_)
         {
-          if(debug_verbose_) std::cout << nhp_.getNamespace() << ": correction time sync" << std::endl;
+          cout << name_ << ", correct: " << endl;
+          cout << "latest propagated state" << endl << correct_state << endl;
+          cout << "last sync covariance" << endl << correct_covariance << endl;
+          cout << "kalman_gain" << endl << kalman_gain  << endl;
 
-          /* no predict state stored: measurement is faster than input */
-          if(timestamp_buf_.size() == 0)
-            {
-              assert(est_cov_buf_.size() == 0);
-              return;
-            }
+          cout << "observation_model" << endl << observation_model  << endl;
+          cout << "inovation_covariance" << endl << inovation_covariance  << endl;
+        }
 
-          size_t index = timestamp_buf_.size() - 1; // max
+    }
+
+
+    /*
+      - Simon Lynen, et.al,
+      "A Robust and Modular Multi-Sensor Fusion Approach Applied to MAV Navigation"
+
+      - Stephan Weiss, et.al,
+      "Versatile Distributed Pose Estimation and Sensor
+      Self-Calibration for an Autonomous MAV"
+    */
+    PredictHandlerPtr getTimeSyncPropagationResult(const double timestamp)
+    {
+      if(predict_handlers_.size() == 0)
+        {
+          if(debug_verbose_)
+            cout << name_ << ", the predict_handlers is empty" << endl;
+          return nullptr; //no valid data
+        }
+
+      if (timestamp > 0 && timestamp < predict_handlers_.front()->timestamp_)
+        {
+          if(predict_handlers_.size() < buf_size_) return predict_handlers_.front();
 
           if(debug_verbose_)
-            cout << nhp_.getNamespace() << ": start timestamp searching from end index: " << timestamp_buf_.size() << endl;
-          for(auto it = timestamp_buf_.begin(); it != timestamp_buf_.end(); ++it)
             {
-              /* future timestamp, escape */
-              if(*it > timestamp)
+              cout << name_ << ", the mesaure time stamp is older than the oldest predict handler: "
+                   << std::fixed << std::setprecision(3) << timestamp << " vs "
+                   << std::fixed << std::setprecision(3) << predict_handlers_.front()->timestamp_
+                   << endl;
+            }
+          return nullptr; //no valid data
+        }
+
+      else if(timestamp > predict_handlers_.back()->timestamp_)
+        {
+          if(debug_verbose_)
+            cout << name_ << ", the mesaure time stamp is future than the latest predict handler: " <<  timestamp << " vs " <<  predict_handlers_.back()->timestamp_ << endl;
+          return nullptr; //no valid data
+        }
+      else
+        {
+          PredictHandlerPtr sync_predict_handler = nullptr;
+          if(timestamp == -1)
+            {
+              sync_predict_handler = predict_handlers_.back(); // no time sync, use the lasted data
+            }
+          else
+            {
+              size_t candidate_index = (predict_handlers_.size() - 1) * (timestamp - predict_handlers_.front()->timestamp_) / (predict_handlers_.back()->timestamp_ - predict_handlers_.front()->timestamp_);
+
+              if(timestamp > predict_handlers_.at(candidate_index)->timestamp_)
                 {
-                  index = distance(timestamp_buf_.begin(), it);
-
-                  /* should assign the state before the measure timestamp */
-                  if(index > 0) index--;
-
                   if(debug_verbose_)
-                    cout << nhp_.getNamespace() << ": correction, time_sync: exit from timestamp searching, index: " << index << ", min_diff of timestamp: " << timestamp - *it << endl;
-                  break;
+                    cout << name_ << ": start timestamp searching from index: " << candidate_index << endl;
+
+                  for(auto it = predict_handlers_.begin() + candidate_index; it != predict_handlers_.end(); ++it)
+                    {
+                      /* future timestamp, escape */
+                      if((*it)->timestamp_ > timestamp)
+                        {
+                          if (fabs((*it)->timestamp_ - timestamp) < fabs((*(it - 1))->timestamp_ - timestamp))
+                            sync_predict_handler = *it;
+                          else
+                            sync_predict_handler = *(it - 1);
+                          break;
+                        }
+                    }
                 }
+              else
+                {
+                  if(debug_verbose_)
+                    cout << name_ << ": start timestamp reverse searching from index: " << candidate_index << endl;
+
+                  for(auto it = predict_handlers_.rbegin() + (predict_handlers_.size() - 1 - candidate_index); it != predict_handlers_.rend(); ++it)
+                    {
+                      /* future timestamp, escape */
+                      if((*it)->timestamp_ < timestamp)
+                        {
+                          if (fabs((*it)->timestamp_ - timestamp) < fabs((*(it - 1))->timestamp_ - timestamp))
+                            sync_predict_handler = *it;
+                          else
+                            sync_predict_handler = *(it - 1);
+                          break;
+                        }
+                    }
+                }
+              if(debug_verbose_)
+                cout << name_ << ", sensor timestamp: " << std::fixed << std::setprecision(3) << timestamp
+                     << ", imu timestamp: " << std::fixed << std::setprecision(3) << sync_predict_handler->timestamp_ << ", next imu timestamp: " << sync_predict_handler->next_handler_->timestamp_ << endl;
+
+
+              assert(sync_predict_handler != nullptr);
             }
 
-          estimate_state = est_state_buf_.at(index);
-          if(est_cov_buf_.size() > 0) estimate_covariance = est_cov_buf_.back();
-
-          /* find the propagated covariance in correct time stamp */
-          if(est_cov_buf_.size() < index + 1)
+          if(last_estimated_cov_handler_->timestamp_ < sync_predict_handler->timestamp_)
             {
-              if(debug_verbose_)
-                cout << nhp_.getNamespace()  << ": correction, time_sync: no enough covariance propagation before correction: " << index + 1 - est_cov_buf_.size() << endl;
-
               /* propagate residual convariance */
+              int cnt = 0;
               MatrixXd state_transition_model;
               MatrixXd control_input_model;
-              for(size_t i = est_cov_buf_.size(); i <  index + 1; i++)
+              while(1)
                 {
-                  getPredictModel(params_buf_.at(i), est_state_buf_.at(i),
+                  cnt++;
+                  MatrixXd prev_covariance = last_estimated_cov_handler_->estimate_covariance_;
+
+                  assert(last_estimated_cov_handler_->next_handler_ != nullptr);
+                  last_estimated_cov_handler_ = last_estimated_cov_handler_->next_handler_; //incremental
+                  assert(last_estimated_cov_handler_->correct_handlers_.size() == 0);
+
+                  getPredictModel(last_estimated_cov_handler_->model_params_,
+                                  last_estimated_cov_handler_->estimate_state_,
                                   state_transition_model, control_input_model);
-                  estimate_covariance = covariancePropagation(estimate_covariance,
-                                                              state_transition_model,
-                                                              control_input_model,
-                                                              input_noise_covariance_);
+                  covariancePropagation(prev_covariance,
+                                        state_transition_model, control_input_model,
+                                        input_noise_covariance_,
+                                        last_estimated_cov_handler_->estimate_covariance_);
+
+                  if(last_estimated_cov_handler_ == sync_predict_handler) break;
                 }
             }
 
-          if(est_cov_buf_.size() > index + 1)
-            {
-              if(debug_verbose_)
-                cout << nhp_.getNamespace() << "correction, time_sync: exceeded covariance propagation than correction timestamp: " << est_cov_buf_.size() - (index + 1) << endl;
-              estimate_covariance = est_cov_buf_.at(index);
-            }
-
-          if(debug_verbose_)
-            {
-              if(est_cov_buf_.size() == index + 1) std::cout << nhp_.getNamespace()  << ": correction, time_sync:  same size" << std::endl;
-            }
-
-          /* remove unnecessary part */
-          est_state_buf_.erase(est_state_buf_.begin(), est_state_buf_.begin() + index + 1);
-          input_buf_.erase(input_buf_.begin(), input_buf_.begin() + index + 1);
-          params_buf_.erase(params_buf_.begin(), params_buf_.begin() + index + 1);
-          timestamp_buf_.erase(timestamp_buf_.begin(), timestamp_buf_.begin() + index + 1);
-          est_cov_buf_.clear();
+          return sync_predict_handler;
         }
     }
 
-    void rePropagation()
+    void rePropagation(const PredictHandlerPtr& sync_predict_handler)
     {
-      //lock
-      std::lock_guard<std::recursive_mutex> lock(kf_mutex_);
-      assert(est_state_buf_.size() == params_buf_.size());
-      if(params_buf_.size() == 0) return;
-
-      /* iteration re-propagation */
-      if(debug_verbose_)
-        cout << nhp_.getNamespace() << ": start re-propagation for " << params_buf_.size() << endl;
-
-      for(auto it = params_buf_.begin(); it != params_buf_.end(); ++it)
+      if(sync_predict_handler == predict_handlers_.back())
         {
-          size_t index = distance(params_buf_.begin(), it);
+          return;
+        }
 
+      last_estimated_cov_handler_ = sync_predict_handler; // update the last estimated_cov_handler;
+
+      double cov_update_laset_timestamp = sync_predict_handler->timestamp_;
+      PredictHandlerPtr handler = sync_predict_handler->next_handler_;
+
+      while(1)
+        {
+          /* record the last (future) handler which need to update the covariance */
+          if(handler->correct_handlers_.size() > 0) last_estimated_cov_handler_ = handler;
+
+          handler = handler->next_handler_;
+
+          if(handler == nullptr) break;
+        }
+
+      handler = sync_predict_handler->next_handler_;
+      VectorXd prev_state = sync_predict_handler->estimate_state_;
+      MatrixXd prev_covariance = sync_predict_handler->estimate_covariance_;
+
+      while(1)
+        {
+          /* propagate state */
           /* update the model */
-          updatePredictModel(*it);
+          MatrixXd state_transition_model, control_input_model;
+          getPredictModel(handler->model_params_, prev_state,
+                          state_transition_model, control_input_model);
+          statePropagation(prev_state, handler->input_,
+                           state_transition_model, control_input_model,
+                           handler->estimate_state_);
 
-          /* only state propagation */
-          statePropagation(input_buf_.at(index));
-
-          /* update the buffer */
-          est_state_buf_.at(index) = estimate_state_;
-          //std::cout << nhp_.getNamespace() << ": estimate state: " << estimate_state_.transpose() << std::endl;
-        }
-    }
-
-    virtual void cfgCallback(kalman_filter::KalmanFilterConfig &config, uint32_t level)
-    {
-      if(config.kalman_filter_flag == true)
-        {
-          ROS_INFO_STREAM(nhp_.getNamespace() << " cfg update");
-
-          switch(level)
+          /*  propagate of covariance */
+          if(handler->timestamp_ <= last_estimated_cov_handler_->timestamp_)
             {
-            case 1:  // hard code: INPUT_ID = 1
-              {
-                // check whether have the desired input id
-                if (config.input_id > input_sigma_v_.size() - 1)
-                  {
-                    ROS_ERROR_STREAM(nhp_.getNamespace() << ": the input id from cfg does not exist, the max id in kalman filter is " << input_sigma_v_.size() - 1);
-                    break;
-                  }
+              covariancePropagation(prev_covariance,
+                                    state_transition_model, control_input_model,
+                                    input_noise_covariance_,
+                                    handler->estimate_covariance_);
 
-                ROS_INFO_STREAM(nhp_.getNamespace() << ": check the input id: " << config.input_id << " which is " << input_name_v_.at(config.input_id));
-                break;
-              }
-            case 2:  // hard code: INPUT_SIGMA = 2
-              {
-                if (config.input_id > input_sigma_v_.size() - 1)
-                  {
-                    ROS_ERROR_STREAM(nhp_.getNamespace() << ": the input id from cfg does not exist, the max id in kalman filter is " << input_sigma_v_.size() - 1);
-                    break;
-                  }
+              /* correction if there is sensor measurement */
+              for(auto it: handler->correct_handlers_)
+                {
+                  //cout << name_ << ": multi-sensor correction: " << std::fixed << std::setprecision(3) <<  it->timestamp_ <<endl;
 
-                ROS_INFO_STREAM(nhp_.getNamespace() << ": change the sigma of " << input_name_v_.at(config.input_id));
-                input_sigma_v_(config.input_id) = config.input_sigma;
-                setPredictionNoiseCovariance();
-              break;
-              }
-            case 3:  // hard code: MEASURE_ID = 3
-              {
-                // check whether have the desired measure id
-                if (config.measure_id > measure_sigma_v_.size() - 1)
-                  {
-                    ROS_ERROR_STREAM(nhp_.getNamespace() << ": the measure id from cfg does not exist, the max id in kalman filter is " << measure_sigma_v_.size() - 1);
-                    break;
-                  }
+                  VectorXd old_estimate_state = handler->estimate_state_;
+                  MatrixXd old_estimate_covariance = handler->estimate_covariance_ ;
+                  MatrixXd observation_model;
+                  getCorrectModel(it->model_params_, old_estimate_state, observation_model);
+                  correctionCore(old_estimate_state, old_estimate_covariance,
+                                 it->measure_value_, observation_model, it->measurement_noise_covariance_,
+                                 handler->estimate_state_,
+                                 handler->estimate_covariance_);
 
-                ROS_INFO_STREAM(nhp_.getNamespace() << ": check the measure id: " << config.measure_id << " which is " << measure_name_v_.at(config.measure_id));
-                break;
-              }
-            case 4:  // hard code: MEASURE_SIGMA = 4
-              {
-                if (config.measure_id > measure_sigma_v_.size() - 1)
-                  {
-                    ROS_ERROR_STREAM(nhp_.getNamespace() << ": the measure id from cfg does not exist, the max id in kalman filter is " << measure_sigma_v_.size() - 1);
-                    break;
-                  }
-
-                ROS_INFO_STREAM(nhp_.getNamespace() << ": change the sigma of " << measure_name_v_.at(config.measure_id));
-                measure_sigma_v_(config.measure_id) = config.measure_sigma;
-                setMeasurementNoiseCovariance();
-              break;
-              }
-            default :
-              break;
+                }
             }
+          prev_state = handler->estimate_state_;
+          prev_covariance = handler->estimate_covariance_;
+          handler = handler->next_handler_;
+
+          if(handler == nullptr) break;
         }
     }
   };
