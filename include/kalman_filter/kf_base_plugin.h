@@ -299,6 +299,12 @@ namespace kf_plugin
     inline void setPredictBufSize(const int buf_size) {buf_size_ = buf_size;}
     inline const int getId() const {return id_;}
 
+    const double& getLastTimestamp()
+    {
+      std::lock_guard<std::recursive_mutex> lock(kf_mutex_);
+      return predict_handlers_.back()->timestamp_;
+    }
+
   protected:
     bool debug_verbose_;
     string name_;
