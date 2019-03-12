@@ -46,6 +46,7 @@
 //* ros
 #include <ros/ros.h>
 #include <tf_conversions/tf_eigen.h>
+#include <eigen_conversions/eigen_msg.h>
 
 class LowPassFilter
 {
@@ -71,6 +72,14 @@ public:
     setInitValues(init_vec);
   }
 
+  /* overwrite function for 3 dimension: geometry_msgs::Point */
+  virtual void setInitValues(const geometry_msgs::Point& init_value)
+  {
+    Eigen::Vector3d init_vec;
+    tf::pointMsgToEigen(init_value, init_vec);
+    setInitValues(init_vec);
+  }
+
   virtual const Eigen::VectorXd filterFunction(const Eigen::VectorXd& input) = 0;
 
   /* overwrite function for 1 dimension */
@@ -88,6 +97,16 @@ public:
     tf::vectorTFToEigen(input, input_vec);
     tf::Vector3 output;
     tf::vectorEigenToTF(filterFunction(input_vec), output);
+    return output;
+  }
+
+  /* overwrite function for 3 dimension: geometry_msgs::Point */
+  virtual const geometry_msgs::Point filterFunction(const geometry_msgs::Point& input)
+  {
+    Eigen::Vector3d input_vec;
+    tf::pointMsgToEigen(input, input_vec);
+    geometry_msgs::Point output;
+    tf::pointEigenToMsg(filterFunction(input_vec), output);
     return output;
   }
 
@@ -266,6 +285,13 @@ class FirFilterQuaternion
     setInitValues(init_value_q);
   }
 
+  void setInitValues(const geometry_msgs::Quaternion& init_value)
+  {
+    Eigen::Quaterniond init_value_q;
+    tf::quaternionMsgToEigen(init_value, init_value_q);
+    setInitValues(init_value_q);
+  }
+
   const Eigen::Quaterniond filterFunction(const Eigen::Quaterniond& input)
   {
     //linear interporation: output_val_ += filter_factor_ * (input - output_val_);
@@ -283,6 +309,16 @@ class FirFilterQuaternion
     tf::quaternionEigenToTF(filterFunction(input_q), output);
     return output;
   }
+
+  const geometry_msgs::Quaternion filterFunction(const geometry_msgs::Quaternion& input)
+  {
+    Eigen::Quaterniond input_q;
+    tf::quaternionMsgToEigen(input, input_q);
+    geometry_msgs::Quaternion output;
+    tf::quaternionEigenToMsg(filterFunction(input_q), output);
+    return output;
+  }
+
 };
 
 
