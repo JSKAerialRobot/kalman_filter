@@ -46,6 +46,7 @@
 //* ros
 #include <ros/ros.h>
 #include <tf_conversions/tf_eigen.h>
+#include <eigen_conversions/eigen_msg.h>
 
 class LowPassFilter
 {
@@ -71,6 +72,14 @@ public:
     setInitValues(init_vec);
   }
 
+  /* overwrite function for 3 dimension: geometry_msgs::Point */
+  virtual void setInitValues(const geometry_msgs::Point& init_value)
+  {
+    Eigen::Vector3d init_vec;
+    tf::pointMsgToEigen(init_value, init_vec);
+    setInitValues(init_vec);
+  }
+
   virtual const Eigen::VectorXd filterFunction(const Eigen::VectorXd& input) = 0;
 
   /* overwrite function for 1 dimension */
@@ -88,6 +97,16 @@ public:
     tf::vectorTFToEigen(input, input_vec);
     tf::Vector3 output;
     tf::vectorEigenToTF(filterFunction(input_vec), output);
+    return output;
+  }
+
+  /* overwrite function for 3 dimension: geometry_msgs::Point */
+  virtual const geometry_msgs::Point filterFunction(const geometry_msgs::Point& input)
+  {
+    Eigen::Vector3d input_vec;
+    tf::pointMsgToEigen(input, input_vec);
+    geometry_msgs::Point output;
+    tf::pointEigenToMsg(filterFunction(input_vec), output);
     return output;
   }
 
@@ -174,7 +193,7 @@ class FirFilter : public LowPassFilter
 {
  private:
   float filter_factor_;
-  Eigen::VectorXd intermediate_val_;
+  Eigen::VectorXd output_val_;
 
  public:
   FirFilter(): LowPassFilter()
@@ -182,24 +201,30 @@ class FirFilter : public LowPassFilter
     filter_factor_ = 1;
   }
 
-  FirFilter(double filter_factor, int dimension = 1)
+  FirFilter(const double& filter_factor, int dimension = 1)
     {
       setFilterFactor(filter_factor);
-      intermediate_val_ = Eigen::VectorXd::Zero(dimension);
+      output_val_ = Eigen::VectorXd::Zero(dimension);
     }
 
   ~FirFilter(){}
 
-  inline void setFilterFactor(double filter_factor)
+  inline void setFilterFactor(const double& filter_factor)
   {
-    assert(filter_factor >= 1);
+    assert(filter_factor <= 1);
     filter_factor_ = filter_factor;
+  }
+
+  inline const double getFilterFactor() const
+  {
+    return filter_factor_;
   }
 
   void setInitValues(const Eigen::VectorXd& init_value)
   {
-    assert(init_value.size() == intermediate_val_.size());
-    intermediate_val_ = init_value * filter_factor_;
+    assert(init_value.size() == output_val_.size());
+
+    output_val_ = init_value;
   }
 
   void setInitValues(const double& init_value) { LowPassFilter::setInitValues(init_value); }
@@ -207,16 +232,94 @@ class FirFilter : public LowPassFilter
 
   const Eigen::VectorXd filterFunction(const Eigen::VectorXd& input)
   {
-    assert(input.size() == intermediate_val_.size());
-    intermediate_val_ -= intermediate_val_ / filter_factor_;
-    intermediate_val_ += input;
+    assert(input.size() == output_val_.size());
+    output_val_ += filter_factor_ * (input - output_val_);
 
-    return intermediate_val_ / filter_factor_;
+    return output_val_;
   }
 
   const tf::Vector3 filterFunction(const tf::Vector3& input) {return  LowPassFilter::filterFunction(input); }
   const double filterFunction(const double& input) {return  LowPassFilter::filterFunction(input); }
 
 };
+
+class FirFilterQuaternion
+{
+ private:
+  float filter_factor_;
+  Eigen::Quaterniond output_val_;
+
+ public:
+  FirFilterQuaternion()
+  {
+    filter_factor_ = 1;
+  }
+
+  FirFilterQuaternion(const double& filter_factor)
+    {
+      setFilterFactor(filter_factor);
+    }
+
+  ~FirFilterQuaternion(){}
+
+  inline const double getFilterFactor() const
+  {
+    return filter_factor_;
+  }
+
+  inline void setFilterFactor(const double& filter_factor)
+  {
+    assert(filter_factor <= 1);
+    filter_factor_ = filter_factor;
+  }
+
+  void setInitValues(const Eigen::Quaterniond& init_value)
+  {
+    output_val_ = init_value;
+  }
+
+  void setInitValues(const tf::Quaternion& init_value)
+  {
+    Eigen::Quaterniond init_value_q;
+    tf::quaternionTFToEigen(init_value, init_value_q);
+    setInitValues(init_value_q);
+  }
+
+  void setInitValues(const geometry_msgs::Quaternion& init_value)
+  {
+    Eigen::Quaterniond init_value_q;
+    tf::quaternionMsgToEigen(init_value, init_value_q);
+    setInitValues(init_value_q);
+  }
+
+  const Eigen::Quaterniond filterFunction(const Eigen::Quaterniond& input)
+  {
+    //linear interporation: output_val_ += filter_factor_ * (input - output_val_);
+
+    output_val_ = output_val_.slerp(filter_factor_, input);
+
+    return output_val_;
+  }
+
+  const tf::Quaternion filterFunction(const tf::Quaternion& input)
+  {
+    Eigen::Quaterniond input_q;
+    tf::quaternionTFToEigen(input, input_q);
+    tf::Quaternion output;
+    tf::quaternionEigenToTF(filterFunction(input_q), output);
+    return output;
+  }
+
+  const geometry_msgs::Quaternion filterFunction(const geometry_msgs::Quaternion& input)
+  {
+    Eigen::Quaterniond input_q;
+    tf::quaternionMsgToEigen(input, input_q);
+    geometry_msgs::Quaternion output;
+    tf::quaternionEigenToMsg(filterFunction(input_q), output);
+    return output;
+  }
+
+};
+
 
 #endif

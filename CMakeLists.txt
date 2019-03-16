@@ -8,6 +8,7 @@ find_package(catkin REQUIRED COMPONENTS
   roscpp
   pluginlib
   tf_conversions
+  eigen_conversions
   dynamic_reconfigure
   cmake_modules
 )
@@ -32,7 +33,7 @@ generate_dynamic_reconfigure_options(
 ###################################
 catkin_package(
   INCLUDE_DIRS include
-  CATKIN_DEPENDS roscpp std_msgs pluginlib
+  CATKIN_DEPENDS roscpp std_msgs tf_conversions eigen_conversions pluginlib
   DEPENDS Eigen3
 )
 
