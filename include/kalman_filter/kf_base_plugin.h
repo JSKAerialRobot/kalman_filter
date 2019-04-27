@@ -111,9 +111,9 @@ namespace kf_plugin
       init_state_ = VectorXd::Zero(state_dim_);
     }
 
-    virtual bool prediction(const VectorXd& input, /* the vector of input */
+    virtual bool prediction(const VectorXd input, /* the vector of input */
                             const double timestamp, /* the timestamp of prediction state(which will be the timestamp for whole system) */
-                            const vector<double>& params = vector<double>(0) /* the vector of param for predict model */)
+                            const vector<double> params = vector<double>(0) /* the vector of param for predict model */)
     {
       std::lock_guard<std::recursive_mutex> lock(kf_mutex_);
 
@@ -172,10 +172,10 @@ namespace kf_plugin
       return true;
     }
 
-    virtual bool correction(const VectorXd& measurement, /* the vector of measurement */
-                            const VectorXd& noise_sigma, /* the vector of measure sigma */
+    virtual bool correction(const VectorXd measurement, /* the vector of measurement */
+                            const VectorXd noise_sigma, /* the vector of measure sigma */
                             const double timestamp = -1, /* timestamp of the measure state */
-                            const vector<double>& params = vector<double>(0), /* the vector of param for correct model, the first param should be timestamp */
+                            const vector<double> params = vector<double>(0), /* the vector of param for correct model, the first param should be timestamp */
                             const double outlier_thresh = 0 /*  check the outlier */)
     {
       /* lock the whole process, since several sensor may acess in the same time */
@@ -239,7 +239,7 @@ namespace kf_plugin
       init_state_(no) = state_value;
     }
 
-    inline void setInitState(const VectorXd& init_state)
+    inline void setInitState(const VectorXd init_state)
     {
       std::lock_guard<std::recursive_mutex> lock(kf_mutex_);
       assert(init_state_.size() == init_state.size());
@@ -264,7 +264,7 @@ namespace kf_plugin
       measurement_noise_covariance = measure_sigma_m * measure_sigma_m;
     }
 
-    const VectorXd& getEstimateState()
+    const VectorXd getEstimateState()
     {
       /* can not add const suffix for this function, because of the lock_guard */
       std::lock_guard<std::recursive_mutex> lock(kf_mutex_);
@@ -274,7 +274,7 @@ namespace kf_plugin
         return init_state_; //no predction
     }
 
-    inline const MatrixXd& getEstimateCovariance()
+    inline const MatrixXd getEstimateCovariance()
     {
       /* TODO: this not correct, if we consider the delay (latency) in time_sync mode */
       std::lock_guard<std::recursive_mutex> lock(kf_mutex_);
@@ -572,7 +572,7 @@ namespace kf_plugin
         }
     }
 
-    const bool measurementOutlierCheck(const VectorXd& residual, const MatrixXd& covariance, const double& outlier_thresh)
+    const bool measurementOutlierCheck(const VectorXd& residual, const MatrixXd& covariance, const double& outlier_thresh) const
     {
       double mahalonobis_dist_square = residual.transpose() * covariance.inverse() * residual;
 

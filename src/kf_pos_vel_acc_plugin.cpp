@@ -84,9 +84,9 @@ namespace kf_plugin
     KalmanFilter::setPredictionNoiseCovariance(input_sigma_v_temp);
   }
 
-  bool KalmanFilterPosVelAcc::prediction(const VectorXd& input,
+  bool KalmanFilterPosVelAcc::prediction(const VectorXd input,
                                          const double timestamp,
-                                         const vector<double>& params)
+                                         const vector<double> params)
   {
     if(input.size() == 1 && estimate_acc_bias_) // special process for bias estimation
       {
