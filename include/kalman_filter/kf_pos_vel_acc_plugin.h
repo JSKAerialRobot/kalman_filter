@@ -62,8 +62,8 @@ namespace kf_plugin
 
     void initialize(string name, int id);
 
-    bool prediction(const VectorXd& input, const double timestamp, const vector<double>& params = vector<double>(0));
-
+    /* speical overwrite */
+    bool prediction(const VectorXd input, const double timestamp, const vector<double> params = vector<double>(0));
     void setPredictionNoiseCovariance(const VectorXd& input_sigma_v);
 
     /* be sure that the first parma should be timestamp */
