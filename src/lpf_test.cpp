@@ -1,3 +1,4 @@
+#include <ros/ros.h>
 #include <boost/shared_ptr.hpp>
 #include <kalman_filter/lpf_filter.h>
 
