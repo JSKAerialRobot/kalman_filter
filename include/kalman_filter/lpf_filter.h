@@ -44,7 +44,6 @@
 #include <Eigen/Dense>
 
 //* ros
-#include <ros/ros.h>
 #include <tf_conversions/tf_eigen.h>
 #include <eigen_conversions/eigen_msg.h>
 
@@ -132,11 +131,11 @@ class IirFilter : public LowPassFilter
  public:
   IirFilter(): LowPassFilter() {}
 
-  IirFilter(double sample_freq, double cutoff_freq, int dimension = 1)
+  IirFilter(double sample_freq, double cutoff_freq, int dimension = 1, bool verbose = false)
     {
       setSampleFreq(sample_freq);
       setCutoffFreq(cutoff_freq);
-      setInitParam();
+      setInitParam(verbose);
 
       pre1_ = Eigen::VectorXd::Zero(dimension);
       pre2_ = Eigen::VectorXd::Zero(dimension);
@@ -147,7 +146,7 @@ class IirFilter : public LowPassFilter
   inline void setSampleFreq(double sample_freq){ sample_freq_ = sample_freq; }
   inline void setCutoffFreq(double cutoff_freq){ cutoff_freq_ = cutoff_freq; }
 
-  void setInitParam()
+  void setInitParam(bool verbose = false)
   {
     assert(sample_freq_ > cutoff_freq_);
 
@@ -159,7 +158,8 @@ class IirFilter : public LowPassFilter
     b1_ =  (1 - cos(w0_)) / (1 + a_);
     b2_ = (1 - cos(w0_)) / 2 / (1 + a_);
 
-    ROS_INFO("%f %f %f %f %f %f %f", w0_, a_, a1_, a2_, b0_, b1_, b2_);
+    if(verbose)
+      std::cout << "IIR Filter: w0: " <<  w0_ << ", a: " << a_ << ", a1: " << a1_ << ", a2 " <<  a2_ << ", b0 " << b0_ << ", b1 " <<  b1_ << ", b2 " << b2_ << std::endl;
   }
 
   void setInitValues(const Eigen::VectorXd& init_value)
