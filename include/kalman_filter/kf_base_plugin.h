@@ -281,8 +281,8 @@ namespace kf_plugin
       return last_estimated_cov_handler_->estimate_covariance_;
     }
 
-    virtual void getPredictModel(const vector<double>& params, const VectorXd& estimate_state, MatrixXd& state_transition_model, MatrixXd& control_input_model) const = 0;
-    virtual void getCorrectModel(const vector<double>& params, const VectorXd& estimate_state, MatrixXd& observation_model) const = 0;
+    virtual void getPredictModel(const vector<double>& params, const VectorXd& estimate_state, MatrixXd& state_transition_model, MatrixXd& control_input_model) {}
+    virtual void getCorrectModel(const vector<double>& params, const VectorXd& estimate_state, MatrixXd& observation_model) {}
 
     inline void setDebugVerbose(const bool flag)  { debug_verbose_ = flag; }
 
