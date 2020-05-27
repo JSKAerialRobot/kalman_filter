@@ -67,8 +67,8 @@ namespace kf_plugin
     void setPredictionNoiseCovariance(const VectorXd& input_sigma_v);
 
     /* be sure that the first parma should be timestamp */
-    void getPredictModel(const vector<double>& params, const VectorXd& estimate_state, MatrixXd& state_transition_model, MatrixXd& control_input_model) const;
-    void getCorrectModel(const vector<double>& params, const VectorXd& estimate_state, MatrixXd& observation_model) const;
+    void getPredictModel(const vector<double>& params, const VectorXd& estimate_state, MatrixXd& state_transition_model, MatrixXd& control_input_model) const override;
+    void getCorrectModel(const vector<double>& params, const VectorXd& estimate_state, MatrixXd& observation_model) const override;
 
     void setInputSigma( VectorXd input_sigma_v);
   private:
