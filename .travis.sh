@@ -2,19 +2,15 @@
 
 set -x
 
-apt-get update
-apt-get install -y sudo software-properties-common git wget sed
+apt-get update -qq && apt-get install -y -q wget sudo lsb-release gnupg git sed # for docker
+echo 'debconf debconf/frontend select Noninteractive' | sudo debconf-set-selections
 
 echo "Testing branch $TRAVIS_BRANCH of $REPOSITORY_NAME"
 sudo sh -c "echo \"deb ${REPOSITORY} `lsb_release -cs` main\" > /etc/apt/sources.list.d/ros-latest.list"
 wget http://packages.ros.org/ros.key -O - | sudo apt-key add -
 sudo apt-get update -qq
 sudo apt-get install -qq -y python-catkin-pkg python-rosdep python-catkin-tools python-wstool ros-${ROS_DISTRO}-catkin
-# TODO: rostest
-# https://github.com/ros/ros_comm/pull/668
-#sudo apt-get install -qq -y ros-${ROS_DISTRO}-rostest
-#(cd /opt/ros/$ROS_DISTRO/lib/python2.7/dist-packages; wget --no-check-certificate https://patch-diff.githubusercontent.com/raw/ros/ros_comm/pull/637.diff -O - | sudo patch -f -p4 || echo "ok" )
-#(cd /opt/ros/$ROS_DISTRO/lib/python2.7/dist-packages; wget --no-check-certificate https://patch-diff.githubusercontent.com/raw/ros/ros_comm/pull/668.diff -O - | sudo patch -f -p4 || echo "ok" )
+
 source /opt/ros/${ROS_DISTRO}/setup.bash
 sudo rosdep init
 rosdep update
