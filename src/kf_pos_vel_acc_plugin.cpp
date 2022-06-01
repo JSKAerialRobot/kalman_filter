@@ -88,14 +88,17 @@ namespace kf_plugin
                                          const double timestamp,
                                          const vector<double> params)
   {
-    if(input.size() == 1 && estimate_acc_bias_) // special process for bias estimation
-      {
+    bool ret = true;
+    if(input.size() == 1 && estimate_acc_bias_) {
+        // special process for bias estimation
         VectorXd input_temp = VectorXd::Zero(2);
         input_temp(0) = input(0);
-        KalmanFilter::prediction(input_temp, timestamp, params);
+        ret = KalmanFilter::prediction(input_temp, timestamp, params);
       }
-    else
-      KalmanFilter::prediction(input, timestamp, params);
+    else {
+        ret = KalmanFilter::prediction(input, timestamp, params);
+    }
+    return ret;
   }
 
   /* be sure that the first param should be timestamp */
