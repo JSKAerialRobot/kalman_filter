@@ -49,6 +49,7 @@
 /* for mutex */
 #include <mutex>
 #include <thread>
+#include <memory>
 
 using namespace Eigen;
 using namespace std;
